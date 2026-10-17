@@ -90,24 +90,41 @@ class SignRecognitionModel {
         'Model expects $expected floats (32x186), got ${sequence.length}.',
       );
     }
-    final input = [sequence];
-    final outputShape = _interpreter.getOutputTensor(0).shape;
-    final output = List.generate(
-      outputShape[0],
-      (_) => List<double>.filled(outputShape[1], 0.0),
-    );
-    _interpreter.run(input, output);
-    final scores = output.first;
-    final indexed = <(int, double)>[
-      for (var i = 0; i < scores.length; i++) (i, scores[i]),
-    ]..sort((a, b) => b.$2.compareTo(a.$2));
-    return [
-      for (final (index, score) in indexed)
-        SignPrediction(
-          label: index < _labels.length ? _labels[index] : 'Isyarat $index',
-          confidence: score,
+    try {
+      final seqLen = LandmarkExtractor.seqLen;
+      final featDim = LandmarkExtractor.featureDim;
+      // Reshape the flat 5952 float list into [1, 32, 186] required by the TFLite interpreter.
+      final input = [
+        List.generate(
+          seqLen,
+          (i) => List<double>.generate(
+            featDim,
+            (j) => sequence[i * featDim + j],
+          ),
         ),
-    ];
+      ];
+      final outputShape = _interpreter.getOutputTensor(0).shape;
+      final output = List.generate(
+        outputShape[0],
+        (_) => List<double>.filled(outputShape[1], 0.0),
+      );
+      _interpreter.run(input, output);
+      final scores = output.first;
+      final indexed = <(int, double)>[
+        for (var i = 0; i < scores.length; i++) (i, scores[i]),
+      ]..sort((a, b) => b.$2.compareTo(a.$2));
+      return [
+        for (final (index, score) in indexed)
+          SignPrediction(
+            label: index < _labels.length ? _labels[index] : 'Isyarat $index',
+            confidence: score,
+          ),
+      ];
+    } catch (e, stack) {
+      // ignore: avoid_print
+      print('SignRecognitionModel inference error: $e\n$stack');
+      return const [];
+    }
   }
 
   void close() {

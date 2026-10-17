@@ -467,3 +467,91 @@ Setelah perekaman berhenti, fungsi stopRecordingAndRecognize() memproses seluruh
 4. **Penyajian Hasil di UI**:
    - Menampilkan chip badge untuk setiap kata terdeteksi lengkap dengan persentase keyakinan.
    - Mengisi kotak pesan teks secara otomatis dengan kalimat gabungan, siap dikirim atau disunting oleh pengguna.
+
+## 14. Perbaikan Kamera Kotak (1:1), Tombol Berhenti, & Standardisasi Styling Antarmuka
+
+### A. Perbaikan Bentuk Kamera Kotak (1:1 Aspect Ratio) & Anti-Gepeng (Center-Crop Fill)
+- **Akar Masalah**: Sebelumnya container kamera menggunakan tinggi statis `height: 350` yang dipadukan dengan `Stack(fit: StackFit.expand)`. Pada perangkat smartphone dalam orientasi potret (lebar 360 - 412 px), rasio ini memaksa `CameraPreview` yang memiliki rasio asli 3:4 atau 9:16 untuk melebar secara paksa ke rasio mendekati 1:1 tanpa mekanisme scaling yang tepat, sehingga objek manusia dan tangan tampak pipih melebar (*gepeng*).
+- **Solusi**:
+  1. Mengubah pembungkus kamera menjadi `AspectRatio(aspectRatio: 1.0)` sehingga bentuk viewport selalu presisi bujur sangkar (**kotak**) pada semua resolusi layar.
+  2. Mengimplementasikan perhitungan dinamis pada `LayoutBuilder`:
+     - Menghitung rasio aspek sebenarnya dari sensor (`previewRatio`).
+     - Menggunakan `OverflowBox` yang dipusatkan di tengah (`Center`), dengan dimensi yang dihitung secara matematis (`BoxFit.cover` manual):
+       - Jika potret: `previewWidth = boxSize`, `previewHeight = boxSize / previewRatio`.
+       - Jika lanskap: `previewWidth = boxSize * previewRatio`, `previewHeight = boxSize`.
+  3. Memotong bagian luapan secara rapi menggunakan `ClipRRect(borderRadius: BorderRadius.circular(24))`, menghasilkan tampilan kamera kotak yang 100% proporsional, tajam, dan tidak gepeng.
+  4. Menambahkan panduan visual *viewfinder* dengan 4 sudut bingkai berwarna hijau toska aksen agar pengguna dapat memposisikan kepala dan dada dengan pas di tengah kotak.
+
+### B. Perbaikan Tombol Berhenti & Rekam Isyarat
+- **Akar Masalah Tombol Tidak Berfungsi**:
+  1. **TFLite Tensor Shape Mismatch**: Pada [lib/services/sign_recognition_model.dart](file:///d:/Project/4mlai/apapun/isyaratin/lib/services/sign_recognition_model.dart), inferensi `_interpreter.run([sequence], output)` mengirimkan flat array `[Float32List(5952)]` (dimensi `[1, 5952]`), padahal input tensor model TFLite adalah 3 dimensi `[1, 32, 186]`. Hal ini memicu unhandled exception di C++ runtime TFLite saat tombol berhenti/selesai ditekan, menyebabkan analisis gagal dan kotak teks tidak terisi.
+  2. **Auto-Stop Terlalu Agresif**: Threshold frame tanpa tangan terlalu rendah (14 frame / ~0.9 detik) sehingga status perekaman kerap berganti otomatis secara mendadak sebelum pengguna menekan tombol berhenti.
+  3. **Kejelasan Tombol di UI**: Label tombol sebelumnya tertulis "Selesai", padahal pengguna mencari tombol "Berhenti" (sesuai ikon stop merah).
+- **Solusi**:
+  1. Mereformasi vektor sekuens menjadi array 3 dimensi berukuran `[1, 32, 186]` (`List.generate(32, ...)`), serta membungkus pemanggilan inferensi dengan penanganan `try-catch` yang aman.
+  2. Mengubah label tombol secara eksplisit menjadi **"Berhenti & Terjemahkan"** dengan warna merah aksen dan ikon `Icons.stop_circle_rounded`, serta tombol FAB mengambang bertuliskan **"Berhenti"** di atas pratinjau kamera saat merekam.
+  3. Menambahkan tombol kontrol **Jeda / Lanjutkan Kamera** (`_togglePauseCamera()`) di toolbar atas kamera untuk memberi kendali penuh kepada pengguna menghentikan/menjeda pratinjau kamera saat tidak digunakan.
+  4. Meningkatkan ambang batas *auto-stop* menjadi 25-28 frame (~1.8 detik) dan menurunkan batas minimal frame dari 10 ke 5 frame agar gerakan cepat tetap berhasil diterjemahkan tanpa error.
+
+### C. Standardisasi Styling, Margin, & Padding Antarmuka
+- **Padding Halaman**: Mengatur padding `ListView` menjadi `EdgeInsets.fromLTRB(20, 16, 20, 24)` agar jarak antar kartu bernapas lega dan tidak tertimpa bar navigasi bawah.
+- **SurfaceCard & Result Chips**: Memberikan padding 16px, border lembut bernuansa tema toska, dan bayangan elevasi halus.
+- **Tombol Hapus pada Input Pesan**: Menambahkan tombol cepat `Hapus` pada header kartu dan `suffixIcon: Icons.clear` pada `TextField` sehingga pengguna dapat mengosongkan teks dengan sekali ketuk.
+- **Responsive Action Buttons**: Menyesuaikan tombol aksi di `ReplyScreen` menjadi lebih ringkas ("Bicara Suara" & "Bacakan Teks") dengan `maxLines: 1` dan `TextOverflow.ellipsis` guna mencegah layout overflow pada layar berukuran kecil (320px).
+
+## 15. Solusi Permasalahan Avatar 3D Loading Terus-Menerus (Infinite Loading Spinner)
+
+### A. Investigasi & Analisis Akar Masalah (Root Cause Analysis)
+Saat membuka layar Langkah 3 (Avatar Merespon), indikator loading menampilkan pesan *"Menyiapkan Avatar 3D & Rig 54 Tulang..."* secara permanen tanpa pernah selesai. Setelah penelusuran mendalam terhadap log Android dan arsitektur WebGL/WebView, ditemukan beberapa faktor pemicu utama:
+
+1. **Pemblokiran Cleartext Traffic oleh Android Network Security Policy (Faktor Terbesar)**:
+   - Server lokal Three.js berjalan pada loopback `http://127.0.0.1:<port>`.
+   - Sejak Android 9.0 (API Level 28), sistem operasi secara default **menolak seluruh koneksi HTTP tanpa enkripsi (cleartext)** dengan galat `net::ERR_CLEARTEXT_NOT_PERMITTED`.
+   - Di [android/app/src/main/AndroidManifest.xml](file:///d:/Project/4mlai/apapun/isyaratin/android/app/src/main/AndroidManifest.xml), atribut `android:usesCleartextTraffic="true"` belum dideklarasikan pada tag `<application>`, sehingga WebView memblokir koneksi ke server lokal sebelum request sempat mencapai HttpServer Dart.
+
+2. **Ketiadaan Error Delegasi & Console Logging pada WebView Flutter**:
+   - `WebViewController` sebelumnya tidak memasang `setOnConsoleMessage` maupun `NavigationDelegate.onWebResourceError`.
+   - Akibatnya, pemblokiran jaringan maupun galat JavaScript yang terjadi di dalam WebView tidak tercetak sama sekali di konsol logcat/debug Flutter (*silent failure*).
+
+3. **Race Condition Injeksi `FlutterBridge` JavaScript Channel**:
+   - Di dalam [assets/avatar/viewer.html](file:///d:/Project/4mlai/apapun/isyaratin/assets/avatar/viewer.html), fungsi `notifyFlutter("avatar_ready")` langsung memeriksa `if (window.FlutterBridge)`.
+   - Pada platform view Android, channel JavaScript terkadang selesai terhubung beberapa milidetik setelah DOM dieksekusi. Jika `window.FlutterBridge` belum tersedia tepat saat model GLB selesai dimuat, pesan `avatar_ready` diabaikan begitu saja dan tidak pernah dikirimkan ulang.
+
+4. **Event Listener `DOMContentLoaded` Terlewat**:
+   - Skrip Three.js dibungkus dalam `window.addEventListener("DOMContentLoaded", ...)`. Jika dokumen telah berstatus *interactive* atau *complete* sebelum listener terpasang, event tersebut tidak akan pernah dipicu kembali.
+
+5. **Ketiadaan Header `Content-Length` & In-Memory Caching untuk Model GLB (13 MB)**:
+   - File model 3D `man-rigged.glb` berukuran ~13 MB dimuat berulang kali dari APK aset bundle tanpa header `Content-Length`.
+   - Hal ini menyebabkan `xhr.lengthComputable` bernilai `false` sehingga bar persentase unduhan tidak berjalan dan rentan terjadi socket timeout pada perangkat dengan spesifikasi terbatas.
+
+6. **Ketiadaan Safety Timeout & Tombol Bypass Manual di Flutter**:
+   - Flag `_isLoading` di [lib/features/conversation/conversation_screens.dart](file:///d:/Project/4mlai/apapun/isyaratin/lib/features/conversation/conversation_screens.dart) dikunci hingga pesan `avatar_ready` tiba tanpa batas waktu (*timeout*), menutupi canvas WebGL secara absolut.
+
+---
+
+### B. Langkah Perbaikan Menyeluruh
+
+1. **Aktivasi Cleartext Loopback di Android Manifest**:
+   - Menambahkan `android:usesCleartextTraffic="true"` pada elemen `<application>` di [android/app/src/main/AndroidManifest.xml](file:///d:/Project/4mlai/apapun/isyaratin/android/app/src/main/AndroidManifest.xml).
+   - Memastikan koneksi HTTP ke `127.0.0.1` diizinkan penuh oleh Android Security Policy.
+
+2. **Antrean Pesan (*Message Queue*) & Polling Retry pada JavaScript Bridge**:
+   - Di [assets/avatar/viewer.html](file:///d:/Project/4mlai/apapun/isyaratin/assets/avatar/viewer.html), fungsi `notifyFlutter` diperbarui dengan sistem antrean `pendingFlutterMessages`.
+   - Jika `window.FlutterBridge` belum siap, pesan disimpan dalam antrean dan dilakukan *polling retry* setiap 120ms hingga bridge aktif dan seluruh pesan terkirim.
+   - Mengekspos variabel global `window.isAvatarReady = true` dan `window.avatarBoneCount = 54` pada context window browser.
+   - Menangani siklus hidup dokumen dengan memeriksa `document.readyState === "loading"` agar inisialisasi segera berjalan tanpa menunggu event `DOMContentLoaded` yang sudah lewat.
+   - Menangkap seluruh galat runtime dengan `window.addEventListener("error", ...)` dan meneruskannya ke Flutter sebagai `avatar_error` / `js_error`.
+
+3. **Optimasi Streaming & Caching di `AvatarMotionService`**:
+   - Menyimpan byte model `man-rigged.glb` di memori (`Uint8List? _cachedGlbBytes`) setelah pembacaan pertama, memangkas waktu muat ulang menjadi seketika (*instant*).
+   - Mengirimkan header HTTP `Content-Length`, `Access-Control-Allow-Origin: *`, dan `Cache-Control: public, max-age=3600` pada aset GLB dan JavaScript.
+   - Menambahkan logging detail `debugPrint('[AvatarMotionService] Incoming request: $path')`.
+
+4. **Penguatan Siklus Hidup & Verifikasi di `AvatarScreen` (Flutter)**:
+   - **Console & Resource Logging**: Menambahkan `setOnConsoleMessage` dan `onWebResourceError` agar seluruh aktivitas JavaScript dan WebGL terpantau di logcat.
+   - **Verification Polling (`_startStatusVerification`)**: Saat halaman webview selesai dimuat (`onPageFinished`), timer periodik mengecek nilai `window.isAvatarReady` setiap 600ms sebagai mekanisme ganda (*double guarantee*) jika notifikasi event bridge terhambat.
+   - **Safety Timeout (8 Detik)**: Memasang timer fallback 8 detik yang otomatis melepaskan overlay loading (`_isLoading = false`) agar pengguna tidak terkunci di layar kosong.
+   - **Tombol Alternatif Manual**: Menambahkan tombol `Buka Tampilan 3D Langsung` di dalam overlay loading agar pengguna dapat membuka canvas 3D sewaktu-waktu.
+   - **Pembaruan Aksi Segarkan**: Tombol refresh di AppBar kini mengatur ulang safety timeout dan memuat ulang WebView secara bersih.
+
+

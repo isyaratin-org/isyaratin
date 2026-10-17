@@ -1,487 +1,746 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="id">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Avatar 3D BISINDO</title>
-  <script src="/js/three.min.js"></script>
-  <script src="/js/OrbitControls.js"></script>
-  <script src="/js/GLTFLoader.js"></script>
-  <style>
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-      -webkit-tap-highlight-color: transparent;
-      user-select: none;
-    }
-    body, html {
-      width: 100%;
-      height: 100%;
-      overflow: hidden;
-      background: radial-gradient(circle at 50% 35%, #1e293b 0%, #090d16 100%);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    }
-    #viewport {
-      width: 100%;
-      height: 100%;
-      position: absolute;
-      top: 0;
-      left: 0;
-    }
-    #threeCanvas {
-      width: 100% !important;
-      height: 100% !important;
-      display: block;
-    }
-
-    /* Floating View Controls */
-    .view-controls {
-      position: absolute;
-      top: 12px;
-      right: 12px;
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      z-index: 20;
-    }
-    .btn-chip {
-      background: rgba(15, 23, 42, 0.75);
-      backdrop-filter: blur(8px);
-      border: 1px solid rgba(255, 255, 255, 0.15);
-      color: #94a3b8;
-      font-size: 11px;
-      font-weight: 600;
-      padding: 6px 10px;
-      border-radius: 20px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      transition: all 0.2s ease;
-    }
-    .btn-chip.active {
-      background: #0d9488;
-      border-color: #14b8a6;
-      color: #ffffff;
-      box-shadow: 0 0 10px rgba(20, 184, 166, 0.4);
-    }
-
-    /* Bottom Info & Scrubbing Bar */
-    .bottom-bar {
-      position: absolute;
-      bottom: 10px;
-      left: 12px;
-      right: 12px;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      background: rgba(15, 23, 42, 0.75);
-      backdrop-filter: blur(8px);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      padding: 8px 14px;
-      border-radius: 24px;
-      z-index: 20;
-    }
-    .btn-icon {
-      background: transparent;
-      border: none;
-      color: #ffffff;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      width: 28px;
-      height: 28px;
-      border-radius: 50%;
-    }
-    .btn-icon:active {
-      background: rgba(255, 255, 255, 0.1);
-    }
-    .progress-slider {
-      flex: 1;
-      accent-color: #14b8a6;
-      height: 4px;
-      cursor: pointer;
-    }
-    .time-badge {
-      font-size: 11px;
-      font-family: monospace;
-      color: #94a3b8;
-      white-space: nowrap;
-    }
-
-    /* Loading Overlay */
-    .loading-overlay {
-      position: absolute;
-      inset: 0;
-      background: rgba(9, 13, 22, 0.95);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 12px;
-      z-index: 50;
-      transition: opacity 0.35s ease;
-    }
-    .spinner {
-      width: 36px;
-      height: 36px;
-      border: 3px solid rgba(20, 184, 166, 0.2);
-      border-top-color: #14b8a6;
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-    }
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
-    .loading-text {
-      font-size: 12px;
-      color: #e2e8f0;
-      font-weight: 500;
-    }
-  </style>
-</head>
-<body>
-  <div id="viewport">
-    <canvas id="threeCanvas"></canvas>
-  </div>
-
-  <!-- Camera Presets -->
-  <div class="view-controls">
-    <button class="btn-chip active" id="camUpper" onclick="setCameraPreset('upper')">Fokus Badan</button>
-    <button class="btn-chip" id="camHands" onclick="setCameraPreset('hands')">Zoom Tangan</button>
-    <button class="btn-chip" id="camHead" onclick="setCameraPreset('head')">Kepala</button>
-  </div>
-
-  <!-- Bottom Player Bar -->
-  <div class="bottom-bar">
-    <button class="btn-icon" id="btnPlayPause" onclick="togglePlay()">
-      <svg id="playIcon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>
-      </svg>
-    </button>
-    <input type="range" class="progress-slider" id="progressSlider" min="0" max="100" value="0" step="0.1" oninput="onScrub(this.value)">
-    <span class="time-badge" id="timeBadge">0.0s / 0.0s</span>
-  </div>
-
-  <!-- Loading State -->
-  <div class="loading-overlay" id="loadingOverlay">
-    <div class="spinner"></div>
-    <div class="loading-text" id="loadingMsg">Memuat Avatar 3D & Gerakan...</div>
-  </div>
-
-  <script>
-    let scene, camera, renderer, controls;
-    let avatarModel = null;
-    let skeletonBones = {};
-    let restPoseRotations = {};
-    let clipPlane = null;
-
-    let motionData = null;
-    let isPlaying = true;
-    let currentTimeMs = 0.0;
-    let totalDurationMs = 2800.0;
-    let playbackSpeed = 1.0;
-    let lastClockTime = performance.now();
-
-    const loadingOverlay = document.getElementById('loadingOverlay');
-    const loadingMsg = document.getElementById('loadingMsg');
-    const progressSlider = document.getElementById('progressSlider');
-    const timeBadge = document.getElementById('timeBadge');
-    const playIcon = document.getElementById('playIcon');
-
-    function notifyFlutter(type, data) {
-      try {
-        if (window.FlutterBridge) {
-          window.FlutterBridge.postMessage(JSON.stringify({ type: type, data: data }));
-        }
-      } catch (e) {
-        console.log('Bridge note:', e);
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
+    <title>Avatar 3D BISINDO</title>
+    <script src="/js/three.min.js"></script>
+    <script src="/js/OrbitControls.js"></script>
+    <script src="/js/GLTFLoader.js"></script>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+        -webkit-tap-highlight-color: transparent;
+        user-select: none;
       }
-    }
-
-    // 1. Inisialisasi Three.js dengan Pemotongan Lower Body (Crop Dada ke Kepala)
-    function initThree() {
-      const container = document.getElementById('viewport');
-      const canvas = document.getElementById('threeCanvas');
-
-      scene = new THREE.Scene();
-
-      // Camera
-      camera = new THREE.PerspectiveCamera(38, container.clientWidth / container.clientHeight, 0.1, 100);
-      setCameraPreset('upper');
-
-      // Clipping plane: memotong semua geometri di bawah y = 1.02 (pinggang & kaki tidak terlihat)
-      clipPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -1.02);
-
-      // Renderer
-      renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, alpha: true });
-      renderer.setSize(container.clientWidth, container.clientHeight);
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-      renderer.outputEncoding = THREE.sRGBEncoding;
-      renderer.clippingPlanes = [clipPlane];
-      renderer.localClippingEnabled = true;
-
-      // Controls
-      controls = new THREE.OrbitControls(camera, renderer.domElement);
-      controls.enableDamping = true;
-      controls.dampingFactor = 0.08;
-      controls.target.set(0, 1.38, 0);
-      controls.minPolarAngle = Math.PI / 4; // 45 deg
-      controls.maxPolarAngle = Math.PI / 2 + 0.05; // stop sebelum melihat dari bawah
-      controls.minDistance = 0.7;
-      controls.maxDistance = 1.9;
-
-      // Lighting
-      const ambient = new THREE.AmbientLight(0xffffff, 0.95);
-      scene.add(ambient);
-
-      const dirLight = new THREE.DirectionalLight(0xffffff, 1.15);
-      dirLight.position.set(2, 4, 3);
-      scene.add(dirLight);
-
-      const rimLight = new THREE.DirectionalLight(0x14b8a6, 0.8);
-      rimLight.position.set(-2, 3, -2);
-      scene.add(rimLight);
-
-      // Sleek subtle pedestal ring under torso cut
-      const ringGeo = new THREE.RingGeometry(0.16, 0.26, 32);
-      const ringMat = new THREE.MeshBasicMaterial({
-        color: 0x14b8a6,
-        side: THREE.DoubleSide,
-        transparent: true,
-        opacity: 0.35,
-      });
-      const ring = new THREE.Mesh(ringGeo, ringMat);
-      ring.rotation.x = Math.PI / 2;
-      ring.position.y = 1.015;
-      scene.add(ring);
-
-      window.addEventListener('resize', onWindowResize);
-      animate();
-    }
-
-    function onWindowResize() {
-      const container = document.getElementById('viewport');
-      if (!camera || !renderer) return;
-      camera.aspect = container.clientWidth / container.clientHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(container.clientWidth, container.clientHeight);
-    }
-
-    function setCameraPreset(mode) {
-      document.querySelectorAll('.btn-chip').forEach(b => b.classList.remove('active'));
-      if (mode === 'upper') {
-        document.getElementById('camUpper')?.classList.add('active');
-        camera?.position.set(0, 1.48, 1.35);
-        controls?.target.set(0, 1.38, 0);
-      } else if (mode === 'hands') {
-        document.getElementById('camHands')?.classList.add('active');
-        camera?.position.set(0, 1.35, 0.85);
-        controls?.target.set(0, 1.30, 0);
-      } else if (mode === 'head') {
-        document.getElementById('camHead')?.classList.add('active');
-        camera?.position.set(0, 1.62, 0.85);
-        controls?.target.set(0, 1.58, 0);
-      }
-    }
-
-    // 2. Load Avatar GLB Model
-    async function loadAvatarModel() {
-      loadingMsg.innerText = 'Mengunduh model avatar (man-rigged.glb)...';
-      const loader = new THREE.GLTFLoader();
-
-      return new Promise((resolve, reject) => {
-        loader.load(
-          '/man-rigged.glb',
-          (gltf) => {
-            avatarModel = gltf.scene;
-            avatarModel.position.set(0, 0, 0);
-            scene.add(avatarModel);
-
-            skeletonBones = {};
-            restPoseRotations = {};
-
-            avatarModel.traverse((child) => {
-              if (child.isBone) {
-                skeletonBones[child.name] = child;
-                restPoseRotations[child.name] = child.quaternion.clone();
-              }
-              if (child.isMesh && child.material) {
-                child.material.clippingPlanes = [clipPlane];
-                child.material.clipShadows = true;
-                child.castShadow = true;
-              }
-            });
-
-            console.log(`[OK] Avatar dimuat: ${Object.keys(skeletonBones).length} bones`);
-            notifyFlutter('avatar_ready', { boneCount: Object.keys(skeletonBones).length });
-            resolve();
-          },
-          (xhr) => {
-            if (xhr.lengthComputable && xhr.total > 0) {
-              const pct = Math.round((xhr.loaded / xhr.total) * 100);
-              loadingMsg.innerText = `Memuat model 3D: ${pct}%`;
-            }
-          },
-          (err) => {
-            console.error('Error loading avatar GLB:', err);
-            loadingMsg.innerText = 'Gagal memuat avatar GLB.';
-            reject(err);
-          }
+      body,
+      html {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: radial-gradient(
+          circle at 50% 35%,
+          #1e293b 0%,
+          #090d16 100%
         );
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      }
+      #viewport {
+        width: 100%;
+        height: 100%;
+        position: absolute;
+        top: 0;
+        left: 0;
+      }
+      #threeCanvas {
+        width: 100% !important;
+        height: 100% !important;
+        display: block;
+      }
+
+      /* Floating View Controls */
+      .view-controls {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        z-index: 20;
+      }
+      .btn-chip {
+        background: rgba(15, 23, 42, 0.75);
+        backdrop-filter: blur(8px);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        color: #94a3b8;
+        font-size: 11px;
+        font-weight: 600;
+        padding: 6px 10px;
+        border-radius: 20px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        transition: all 0.2s ease;
+      }
+      .btn-chip.active {
+        background: #0d9488;
+        border-color: #14b8a6;
+        color: #ffffff;
+        box-shadow: 0 0 10px rgba(20, 184, 166, 0.4);
+      }
+
+      /* Bottom Info & Scrubbing Bar */
+      .bottom-bar {
+        position: absolute;
+        bottom: 10px;
+        left: 12px;
+        right: 12px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        background: rgba(15, 23, 42, 0.75);
+        backdrop-filter: blur(8px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        padding: 8px 14px;
+        border-radius: 24px;
+        z-index: 20;
+      }
+      .btn-icon {
+        background: transparent;
+        border: none;
+        color: #ffffff;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+      }
+      .btn-icon:active {
+        background: rgba(255, 255, 255, 0.1);
+      }
+      .progress-slider {
+        flex: 1;
+        accent-color: #14b8a6;
+        height: 4px;
+        cursor: pointer;
+      }
+      .time-badge {
+        font-size: 11px;
+        font-family: monospace;
+        color: #94a3b8;
+        white-space: nowrap;
+      }
+
+      /* Loading Overlay */
+      .loading-overlay {
+        position: absolute;
+        inset: 0;
+        background: rgba(9, 13, 22, 0.95);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        z-index: 50;
+        transition: opacity 0.35s ease;
+      }
+      .spinner {
+        width: 36px;
+        height: 36px;
+        border: 3px solid rgba(20, 184, 166, 0.2);
+        border-top-color: #14b8a6;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .loading-text {
+        font-size: 12px;
+        color: #e2e8f0;
+        font-weight: 500;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="viewport">
+      <canvas id="threeCanvas"></canvas>
+    </div>
+
+    <!-- Camera Presets -->
+    <div class="view-controls">
+      <button
+        class="btn-chip active"
+        id="camUpper"
+        onclick="setCameraPreset('upper')"
+      >
+        Fokus Badan
+      </button>
+      <button class="btn-chip" id="camHands" onclick="setCameraPreset('hands')">
+        Zoom Tangan
+      </button>
+      <button class="btn-chip" id="camHead" onclick="setCameraPreset('head')">
+        Kepala
+      </button>
+    </div>
+
+    <!-- Bottom Player Bar -->
+    <div class="bottom-bar">
+      <button class="btn-icon" id="btnPlayPause" onclick="togglePlay()">
+        <svg
+          id="playIcon"
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="currentColor"
+        >
+          <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+        </svg>
+      </button>
+      <input
+        type="range"
+        class="progress-slider"
+        id="progressSlider"
+        min="0"
+        max="100"
+        value="0"
+        step="0.1"
+        oninput="onScrub(this.value)"
+      />
+      <span class="time-badge" id="timeBadge">0.0s / 0.0s</span>
+    </div>
+
+    <!-- Loading State -->
+    <div class="loading-overlay" id="loadingOverlay">
+      <div class="spinner"></div>
+      <div class="loading-text" id="loadingMsg">
+        Memuat Avatar 3D & Gerakan...
+      </div>
+    </div>
+
+    <script>
+      let scene, camera, renderer, controls;
+      let avatarModel = null;
+      let skeletonBones = {};
+      let restPoseRotations = {};
+      let drivenBoneNames = new Set();
+      let clipPlane = null;
+
+      let motionData = null;
+      let isPlaying = true;
+      let currentTimeMs = 0.0;
+      let totalDurationMs = 2800.0;
+      let playbackSpeed = 1.0;
+      let lastClockTime = performance.now();
+
+      // Motion library (dari manifest JSON)
+      let availableMotions = [];
+      let currentMotionId = null;
+
+      // Quaternion scratch objects (hindari alokasi per frame)
+      const motionQuaternionA = new THREE.Quaternion();
+      const motionQuaternionB = new THREE.Quaternion();
+      const motionQuaternionResult = new THREE.Quaternion();
+
+      const loadingOverlay = document.getElementById("loadingOverlay");
+      const loadingMsg = document.getElementById("loadingMsg");
+      const progressSlider = document.getElementById("progressSlider");
+      const timeBadge = document.getElementById("timeBadge");
+      const playIcon = document.getElementById("playIcon");
+
+      window.isAvatarReady = false;
+      window.avatarBoneCount = 0;
+      const pendingFlutterMessages = [];
+      let isBridgePolling = false;
+
+      function startBridgePolling() {
+        if (isBridgePolling) return;
+        isBridgePolling = true;
+        const interval = setInterval(() => {
+          if (
+            window.FlutterBridge &&
+            typeof window.FlutterBridge.postMessage === "function"
+          ) {
+            while (pendingFlutterMessages.length > 0) {
+              const msg = pendingFlutterMessages.shift();
+              try {
+                window.FlutterBridge.postMessage(msg);
+                console.log("[Bridge Flushed]:", msg);
+              } catch (err) {
+                console.error("[Bridge Error]:", err);
+              }
+            }
+          }
+          if (pendingFlutterMessages.length === 0) {
+            clearInterval(interval);
+            isBridgePolling = false;
+          }
+        }, 120);
+      }
+
+      function notifyFlutter(type, data) {
+        const payload = JSON.stringify({ type: type, data: data });
+        try {
+          if (
+            window.FlutterBridge &&
+            typeof window.FlutterBridge.postMessage === "function"
+          ) {
+            window.FlutterBridge.postMessage(payload);
+            console.log("[Bridge Sent]:", type);
+          } else {
+            console.warn("[Bridge Queued]:", type);
+            pendingFlutterMessages.push(payload);
+            startBridgePolling();
+          }
+        } catch (e) {
+          console.error("[Bridge Error]:", e);
+          pendingFlutterMessages.push(payload);
+          startBridgePolling();
+        }
+      }
+
+      window.addEventListener("error", (e) => {
+        console.error("[Window Error]:", e.message);
+        notifyFlutter("js_error", { message: e.message, filename: e.filename });
       });
-    }
 
-    // 3. Motion Management
-    async function loadMotion(motionIdOrFilename) {
-      try {
-        let file = motionIdOrFilename;
-        if (!file.endsWith('.json')) {
-          file = `${file}_motion.json`;
+      // 1. Inisialisasi Three.js dengan Pemotongan Lower Body (Crop Dada ke Kepala)
+      function initThree() {
+        const container = document.getElementById("viewport");
+        const canvas = document.getElementById("threeCanvas");
+
+        scene = new THREE.Scene();
+
+        // Camera
+        camera = new THREE.PerspectiveCamera(
+          38,
+          container.clientWidth / container.clientHeight,
+          0.1,
+          100,
+        );
+        setCameraPreset("upper");
+
+        // Clipping plane: memotong semua geometri di bawah y = 1.02 (pinggang & kaki tidak terlihat)
+        clipPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -1.02);
+
+        // Renderer
+        renderer = new THREE.WebGLRenderer({
+          canvas: canvas,
+          antialias: true,
+          alpha: true,
+        });
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.outputEncoding = THREE.sRGBEncoding;
+        renderer.clippingPlanes = [clipPlane];
+        renderer.localClippingEnabled = true;
+
+        // Controls
+        controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.08;
+        controls.target.set(0, 1.38, 0);
+        controls.minPolarAngle = Math.PI / 4; // 45 deg
+        controls.maxPolarAngle = Math.PI / 2 + 0.05; // stop sebelum melihat dari bawah
+        controls.minDistance = 0.7;
+        controls.maxDistance = 1.9;
+
+        // Lighting
+        const ambient = new THREE.AmbientLight(0xffffff, 0.95);
+        scene.add(ambient);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.15);
+        dirLight.position.set(2, 4, 3);
+        scene.add(dirLight);
+
+        const rimLight = new THREE.DirectionalLight(0x14b8a6, 0.8);
+        rimLight.position.set(-2, 3, -2);
+        scene.add(rimLight);
+
+        // Sleek subtle pedestal ring under torso cut
+        const ringGeo = new THREE.RingGeometry(0.16, 0.26, 32);
+        const ringMat = new THREE.MeshBasicMaterial({
+          color: 0x14b8a6,
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: 0.35,
+        });
+        const ring = new THREE.Mesh(ringGeo, ringMat);
+        ring.rotation.x = Math.PI / 2;
+        ring.position.y = 1.015;
+        scene.add(ring);
+
+        window.addEventListener("resize", onWindowResize);
+        animate();
+      }
+
+      function onWindowResize() {
+        const container = document.getElementById("viewport");
+        if (!camera || !renderer) return;
+        camera.aspect = container.clientWidth / container.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(container.clientWidth, container.clientHeight);
+      }
+
+      function setCameraPreset(mode) {
+        document
+          .querySelectorAll(".btn-chip")
+          .forEach((b) => b.classList.remove("active"));
+        if (mode === "upper") {
+          document.getElementById("camUpper")?.classList.add("active");
+          camera?.position.set(0, 1.48, 1.35);
+          controls?.target.set(0, 1.38, 0);
+        } else if (mode === "hands") {
+          document.getElementById("camHands")?.classList.add("active");
+          camera?.position.set(0, 1.35, 0.85);
+          controls?.target.set(0, 1.3, 0);
+        } else if (mode === "head") {
+          document.getElementById("camHead")?.classList.add("active");
+          camera?.position.set(0, 1.62, 0.85);
+          controls?.target.set(0, 1.58, 0);
         }
-        loadingMsg.innerText = `Memuat gerakan: ${file}...`;
+      }
 
-        // Coba load via motions path
-        let resp = await fetch(`/motions/${file}`);
-        if (!resp.ok) {
-          // Fallback coba format motion_<label>.json
-          const alt = file.startsWith('motion_') ? file.replace('motion_', '') : `motion_${file}`;
-          resp = await fetch(`/motions/${alt}`);
+      // 2. Muat Manifest Gerakan (id -> motionFile)
+      async function loadManifest() {
+        try {
+          const resp = await fetch("/motions/motions_manifest.json", {
+            cache: "no-store",
+          });
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          const list = await resp.json();
+          if (Array.isArray(list) && list.length > 0) {
+            availableMotions = list;
+            console.log(
+              `[OK] Manifest dimuat: ${availableMotions.length} gerakan`,
+            );
+            return;
+          }
+          throw new Error("Manifest kosong");
+        } catch (e) {
+          console.warn("Gagal memuat manifest, fallback ke id langsung:", e);
+          availableMotions = [];
+        }
+      }
+
+      function resolveMotionFile(idOrFilename) {
+        if (idOrFilename.endsWith(".json")) return idOrFilename;
+        // Cari di manifest berdasarkan id
+        const meta = availableMotions.find((m) => m.id === idOrFilename);
+        if (meta && meta.motionFile) return meta.motionFile;
+        // Fallback: coba beberapa pola nama
+        return `motion_manual_${idOrFilename}.json`;
+      }
+
+      // 3. Load Avatar GLB Model
+      async function loadAvatarModel() {
+        loadingMsg.innerText = "Mengunduh model avatar (man-rigged.glb)...";
+        const loader = new THREE.GLTFLoader();
+
+        return new Promise((resolve, reject) => {
+          loader.load(
+            "/man-rigged.glb",
+            (gltf) => {
+              avatarModel = gltf.scene;
+              avatarModel.position.set(0, 0, 0);
+              scene.add(avatarModel);
+
+              skeletonBones = {};
+              restPoseRotations = {};
+
+              avatarModel.traverse((child) => {
+                if (child.isBone) {
+                  skeletonBones[child.name] = child;
+                  restPoseRotations[child.name] = child.quaternion.clone();
+                }
+                if (child.isMesh && child.material) {
+                  child.material.clippingPlanes = [clipPlane];
+                  child.material.clipShadows = true;
+                  child.castShadow = true;
+                }
+              });
+
+              window.isAvatarReady = true;
+              window.avatarBoneCount = Object.keys(skeletonBones).length;
+              console.log(
+                `[OK] Avatar dimuat: ${Object.keys(skeletonBones).length} bones`,
+              );
+              notifyFlutter("avatar_ready", {
+                boneCount: Object.keys(skeletonBones).length,
+              });
+              resolve();
+            },
+            (xhr) => {
+              if (xhr.lengthComputable && xhr.total > 0) {
+                const pct = Math.round((xhr.loaded / xhr.total) * 100);
+                loadingMsg.innerText = `Memuat model 3D: ${pct}%`;
+              }
+            },
+            (err) => {
+              console.error("Error loading avatar GLB:", err);
+              loadingMsg.innerText = "Gagal memuat avatar GLB.";
+              notifyFlutter("avatar_error", { error: String(err) });
+              reject(err);
+            },
+          );
+        });
+      }
+
+      // 4. Motion Management (format motion_manual_*.json)
+      async function loadMotion(motionIdOrFilename) {
+        try {
+          const file = resolveMotionFile(motionIdOrFilename);
+          loadingMsg.innerText = `Memuat gerakan: ${file}...`;
+
+          const resp = await fetch(`/motions/${file}`, { cache: "no-store" });
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+          motionData = await resp.json();
+          currentMotionId = motionIdOrFilename;
+
+          // Durasi: pakai durationMs dari file, fallback dari manifest / frame count
+          const meta = availableMotions.find(
+            (m) => m.id === motionIdOrFilename,
+          );
+          totalDurationMs =
+            motionData.durationMs ||
+            (meta && meta.durationMs) ||
+            motionData.totalFrames * (1000.0 / (motionData.sourceFps || 30.0));
+
+          prepareMotionData();
+          currentTimeMs = 0.0;
+          isPlaying = true;
+          updatePlayIcon();
+          applyMotionAtTime(0);
+
+          console.log(
+            `[OK] Motion loaded: ${file}, duration: ${totalDurationMs}ms, frames: ${motionData.totalFrames}`,
+          );
+          notifyFlutter("motion_loaded", {
+            gloss: motionData.gloss || file,
+            durationMs: totalDurationMs,
+            totalFrames: motionData.totalFrames,
+          });
+        } catch (e) {
+          console.warn("Gagal memuat gerakan:", motionIdOrFilename, e);
+          // Fallback: jika id tidak ditemukan (mis. id lama seperti "rumah"),
+          // muat gerakan pertama dari manifest agar avatar tetap menampilkan gerakan.
+          if (
+            availableMotions.length > 0 &&
+            motionIdOrFilename !== availableMotions[0].id
+          ) {
+            console.warn("Fallback ke gerakan pertama:", availableMotions[0].id);
+            await loadMotion(availableMotions[0].id);
+          }
+        }
+      }
+
+      // Siapkan data: pastikan tiap frame punya timestampMs & kumpulkan bone yang digerakkan
+      function prepareMotionData() {
+        drivenBoneNames = new Set();
+        if (!motionData || !Array.isArray(motionData.frames)) return;
+
+        motionData.frames.forEach((frame, index) => {
+          if (!Number.isFinite(frame.timestampMs)) {
+            const fps = Number(motionData.sourceFps) || 30;
+            frame.timestampMs = (index / fps) * 1000;
+          }
+          Object.keys(frame.rotations || {}).forEach((name) =>
+            drivenBoneNames.add(name),
+          );
+        });
+      }
+
+      // Reset semua bone yang digerakkan motion ke pose rest (agar tidak ada sisa gerakan sebelumnya)
+      function resetDrivenBonesToRest() {
+        for (const name of drivenBoneNames) {
+          const bone = skeletonBones[name];
+          const restQ = restPoseRotations[name];
+          if (bone && restQ) bone.quaternion.copy(restQ);
+        }
+      }
+
+      // Cari pasangan frame (prev, next) untuk interpolasi halus berdasarkan timestamp
+      function findMotionFramePair(timeMs) {
+        const frames = motionData.frames;
+        if (frames.length === 1 || timeMs <= frames[0].timestampMs) {
+          return { previous: frames[0], next: frames[0], alpha: 0, index: 0 };
         }
 
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const lastIndex = frames.length - 1;
+        if (timeMs >= frames[lastIndex].timestampMs) {
+          return {
+            previous: frames[lastIndex],
+            next: frames[lastIndex],
+            alpha: 0,
+            index: lastIndex,
+          };
+        }
 
-        motionData = await resp.json();
-        totalDurationMs = motionData.durationMs || (motionData.totalFrames * (1000.0 / (motionData.sourceFps || 30.0)));
+        // Binary search
+        let low = 0;
+        let high = lastIndex;
+        while (low + 1 < high) {
+          const middle = (low + high) >> 1;
+          if (frames[middle].timestampMs <= timeMs) low = middle;
+          else high = middle;
+        }
+
+        const previous = frames[low];
+        const next = frames[high];
+        const span = Math.max(1, next.timestampMs - previous.timestampMs);
+        return {
+          previous,
+          next,
+          alpha: THREE.MathUtils.clamp(
+            (timeMs - previous.timestampMs) / span,
+            0,
+            1,
+          ),
+          index: low,
+        };
+      }
+
+      function readDeltaQuaternion(rotations, boneName, target) {
+        const values = rotations && rotations[boneName];
+        if (
+          !Array.isArray(values) ||
+          values.length !== 4 ||
+          !values.every(Number.isFinite)
+        ) {
+          return target.identity();
+        }
+        return target
+          .set(values[0], values[1], values[2], values[3])
+          .normalize();
+      }
+
+      // 5. Update Pose Avatar berdasarkan Waktu (interpolasi slerp antar frame)
+      function applyMotionAtTime(timeMs) {
+        if (
+          !motionData ||
+          !avatarModel ||
+          !motionData.frames ||
+          motionData.frames.length === 0
+        )
+          return;
+
+        const sample = findMotionFramePair(
+          THREE.MathUtils.clamp(timeMs, 0, totalDurationMs),
+        );
+        const previousRotations = sample.previous.rotations || {};
+        const nextRotations = sample.next.rotations || {};
+
+        // Reset dulu agar bone dari motion sebelumnya tidak tertinggal
+        resetDrivenBonesToRest();
+
+        for (const boneName of drivenBoneNames) {
+          const bone = skeletonBones[boneName];
+          const restQ = restPoseRotations[boneName];
+          if (!bone || !restQ) continue;
+
+          readDeltaQuaternion(previousRotations, boneName, motionQuaternionA);
+          readDeltaQuaternion(nextRotations, boneName, motionQuaternionB);
+          motionQuaternionResult
+            .copy(motionQuaternionA)
+            .slerp(motionQuaternionB, sample.alpha)
+            .normalize();
+          bone.quaternion.copy(restQ).multiply(motionQuaternionResult);
+        }
+      }
+
+      // 6. Animasi Loop
+      function animate() {
+        requestAnimationFrame(animate);
+
+        const now = performance.now();
+        const deltaSec = (now - lastClockTime) / 1000.0;
+        lastClockTime = now;
+
+        if (isPlaying && totalDurationMs > 0) {
+          currentTimeMs += deltaSec * 1000.0 * playbackSpeed;
+          if (currentTimeMs >= totalDurationMs) {
+            currentTimeMs = 0.0; // Loop gerakan
+          }
+
+          applyMotionAtTime(currentTimeMs);
+
+          // Update UI
+          const curSec = (currentTimeMs / 1000.0).toFixed(1);
+          const totSec = (totalDurationMs / 1000.0).toFixed(1);
+          timeBadge.innerText = `${curSec}s / ${totSec}s`;
+          progressSlider.value = (currentTimeMs / totalDurationMs) * 100;
+        }
+
+        if (controls) controls.update();
+        if (renderer && scene && camera) renderer.render(scene, camera);
+      }
+
+      // 7. Kontrol Playback
+      function togglePlay() {
+        isPlaying = !isPlaying;
+        updatePlayIcon();
+      }
+
+      function updatePlayIcon() {
+        if (isPlaying) {
+          playIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>'; // Pause icon
+        } else {
+          playIcon.innerHTML = '<path d="M8 5v14l11-7z"/>'; // Play icon
+        }
+      }
+
+      function replay() {
         currentTimeMs = 0.0;
         isPlaying = true;
         updatePlayIcon();
         applyMotionAtTime(0);
-
-        console.log(`[OK] Motion loaded: ${file}, duration: ${totalDurationMs}ms`);
-        notifyFlutter('motion_loaded', {
-          gloss: motionData.gloss || file,
-          durationMs: totalDurationMs,
-          totalFrames: motionData.totalFrames
-        });
-      } catch (e) {
-        console.warn('Gagal memuat gerakan:', e);
       }
-    }
 
-    // 4. Update Pose Avatar berdasarkan Waktu
-    function applyMotionAtTime(timeMs) {
-      if (!motionData || !avatarModel || !motionData.frames || motionData.frames.length === 0) return;
-
-      const frames = motionData.frames;
-      const frameDuration = totalDurationMs / frames.length;
-      let frameIndex = Math.floor(timeMs / frameDuration);
-      frameIndex = Math.max(0, Math.min(frameIndex, frames.length - 1));
-
-      const frameData = frames[frameIndex];
-      if (!frameData || !frameData.rotations) return;
-
-      const rots = frameData.rotations;
-
-      for (const [boneName, qArr] of Object.entries(rots)) {
-        const bone = skeletonBones[boneName];
-        if (bone && qArr && qArr.length === 4) {
-          const restQ = restPoseRotations[boneName];
-          if (restQ) {
-            const deltaQ = new THREE.Quaternion(qArr[0], qArr[1], qArr[2], qArr[3]);
-            bone.quaternion.copy(restQ).multiply(deltaQ);
-          }
-        }
+      function setSpeed(spd) {
+        playbackSpeed = parseFloat(spd) || 1.0;
       }
-    }
 
-    // 5. Animasi Loop
-    function animate() {
-      requestAnimationFrame(animate);
-
-      const now = performance.now();
-      const deltaSec = (now - lastClockTime) / 1000.0;
-      lastClockTime = now;
-
-      if (isPlaying && totalDurationMs > 0) {
-        currentTimeMs += deltaSec * 1000.0 * playbackSpeed;
-        if (currentTimeMs >= totalDurationMs) {
-          currentTimeMs = 0.0; // Loop gerakan
-        }
-
+      function onScrub(val) {
+        if (totalDurationMs <= 0) return;
+        currentTimeMs = (val / 100) * totalDurationMs;
         applyMotionAtTime(currentTimeMs);
-
-        // Update UI
         const curSec = (currentTimeMs / 1000.0).toFixed(1);
         const totSec = (totalDurationMs / 1000.0).toFixed(1);
         timeBadge.innerText = `${curSec}s / ${totSec}s`;
-        progressSlider.value = (currentTimeMs / totalDurationMs) * 100;
       }
 
-      if (controls) controls.update();
-      if (renderer && scene && camera) renderer.render(scene, camera);
-    }
-
-    // 6. Kontrol Playback
-    function togglePlay() {
-      isPlaying = !isPlaying;
-      updatePlayIcon();
-    }
-
-    function updatePlayIcon() {
-      if (isPlaying) {
-        playIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>'; // Pause icon
-      } else {
-        playIcon.innerHTML = '<path d="M8 5v14l11-7z"/>'; // Play icon
-      }
-    }
-
-    function replay() {
-      currentTimeMs = 0.0;
-      isPlaying = true;
-      updatePlayIcon();
-      applyMotionAtTime(0);
-    }
-
-    function setSpeed(spd) {
-      playbackSpeed = parseFloat(spd) || 1.0;
-    }
-
-    function onScrub(val) {
-      if (totalDurationMs <= 0) return;
-      currentTimeMs = (val / 100) * totalDurationMs;
-      applyMotionAtTime(currentTimeMs);
-      const curSec = (currentTimeMs / 1000.0).toFixed(1);
-      const totSec = (totalDurationMs / 1000.0).toFixed(1);
-      timeBadge.innerText = `${curSec}s / ${totSec}s`;
-    }
-
-    function resetToNeutral() {
-      for (const [name, bone] of Object.entries(skeletonBones)) {
-        if (restPoseRotations[name]) {
-          bone.quaternion.copy(restPoseRotations[name]);
+      function resetToNeutral() {
+        for (const [name, bone] of Object.entries(skeletonBones)) {
+          if (restPoseRotations[name]) {
+            bone.quaternion.copy(restPoseRotations[name]);
+          }
         }
       }
-    }
 
-    // Inisialisasi awal saat load
-    window.addEventListener('DOMContentLoaded', async () => {
-      initThree();
-      try {
-        await loadAvatarModel();
-        // Load default motion: rumah
-        await loadMotion('rumah');
-      } catch (e) {
-        console.error(e);
-      } finally {
-        loadingOverlay.style.opacity = '0';
-        setTimeout(() => {
-          loadingOverlay.style.display = 'none';
-        }, 350);
+      // Inisialisasi awal saat load
+      function startApp() {
+        if (window.__appStarted) return;
+        window.__appStarted = true;
+        console.log("[Viewer] Inisialisasi Three.js viewport...");
+        initThree();
+        loadManifest()
+          .then(() => loadAvatarModel())
+          .then(() => {
+            const defaultId =
+              availableMotions.length > 0 ? availableMotions[0].id : "ktp";
+            return loadMotion(defaultId);
+          })
+          .catch((e) => {
+            console.error("[Viewer Init Error]:", e);
+            notifyFlutter("avatar_error", { error: String(e) });
+          })
+          .finally(() => {
+            if (loadingOverlay) {
+              loadingOverlay.style.opacity = "0";
+              setTimeout(() => {
+                loadingOverlay.style.display = "none";
+              }, 350);
+            }
+          });
       }
-    });
-  </script>
-</body>
+
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", startApp);
+      } else {
+        startApp();
+      }
+    </script>
+  </body>
 </html>

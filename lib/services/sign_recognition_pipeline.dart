@@ -129,9 +129,18 @@ class SignRecognitionPipeline {
   Stream<LiveSignPrediction> get predictions => _controller.stream;
 
   bool _disposed = false;
-  bool _isProcessing = false;
   int _lastProcessedMs = 0;
-  static const int _targetIntervalMs = 80; // ~12 fps to match model target_fps
+  // Match training TARGET_FPS of 12.0 (train-new.py). The model was trained on
+  // 12 fps sequences, so sampling faster wastes CPU and skews temporal features.
+  static const int _targetIntervalMs = 83; // ~12 fps target
+
+  // Non-blocking frame pipeline: the camera stream callback only enqueues the
+  // latest frame and returns immediately, so it never blocks on ML inference.
+  // A single worker loop drains the queue at its own pace, dropping stale
+  // frames when inference is slower than capture.
+  final List<_QueuedFrame> _frameQueue = [];
+  bool _workerRunning = false;
+  bool _workerScheduled = false;
 
   // Recording state
   bool _isRecording = false;
@@ -143,10 +152,27 @@ class SignRecognitionPipeline {
   int _framesWithHandsDuringRecording = 0;
   bool _autoStopTriggered = false;
 
+  // Pose caching: shoulders (body-centric reference) barely move during a sign,
+  // so re-running ML Kit pose detection every frame is wasteful and is the main
+  // cause of slow per-frame recording. Re-detect every few frames, reuse in between.
+  PoseLandmarks? _lastPose;
+  int _frameCounter = 0;
+
+  // Hand landmarker throttling: the plugin does a full YUV->RGB bitmap
+  // conversion in Kotlin on every call, which is the dominant per-frame cost.
+  // Feed it at ~12 fps (matching training) instead of camera capture rate.
+  int _lastHandProcessMs = 0;
+
   void _initHandLandmarker() {
     if (!kIsWeb && Platform.isAndroid) {
       try {
-        _handLandmarker = HandLandmarkerPlugin.create(numHands: 2);
+        // CPU delegate is far more reliable than GPU across Android devices;
+        // GPU delegate silently fails on many SoCs, leaving hand features
+        // zeroed and breaking classification inference.
+        _handLandmarker = HandLandmarkerPlugin.create(
+          numHands: 2,
+          delegate: HandLandmarkerDelegate.cpu,
+        );
         _handSubscription = _handLandmarker!.landmarkStream.listen((hands) {
           _latestHands = [
             for (final hand in hands)
@@ -187,20 +213,20 @@ class SignRecognitionPipeline {
     _recordedFrames.clear();
     final duration = _recordStartTime != null
         ? (DateTime.now().millisecondsSinceEpoch -
-                _recordStartTime!.millisecondsSinceEpoch) /
-            1000.0
+                  _recordStartTime!.millisecondsSinceEpoch) /
+              1000.0
         : (recorded.length * 0.08);
     _recordStartTime = null;
     _autoStopTriggered = false;
 
-    if (recorded.length < 10) {
+    if (recorded.length < 5) {
       return RecordedSignResult(
         sentence: '',
         words: const [],
         totalFrames: recorded.length,
         durationSeconds: duration,
         errorMessage:
-            'Gerakan terlalu singkat (kurang dari 1 detik). Silakan coba rekam kembali.',
+            'Gerakan terlalu singkat (kurang dari 0.5 detik). Silakan coba rekam kembali.',
       );
     }
 
@@ -209,24 +235,90 @@ class SignRecognitionPipeline {
 
   /// Feeds one camera frame into the pipeline.
   ///
-  /// Call from `cameraController.startImageStream`.
+  /// Call from `cameraController.startImageStream`. This returns immediately:
+  /// the frame bytes are copied synchronously (the `CameraImage` buffer is only
+  /// valid during the callback) and enqueued for a background worker loop, so
+  /// the camera stream is never blocked by ML inference.
   Future<void> processFrame(CameraImage image, int sensorOrientation) async {
-    if (_disposed || _isProcessing) return;
+    if (_disposed) return;
 
     final now = DateTime.now().millisecondsSinceEpoch;
-    if (now - _lastProcessedMs < _targetIntervalMs) return;
-    _lastProcessedMs = now;
-    _isProcessing = true;
 
-    try {
+    // Feed MediaPipe hand landmarker (fire-and-forget, native async), but
+    // throttled to ~12 fps. The plugin's YUV->RGB conversion is expensive and
+    // running it at capture rate (30fps) is the main cause of slow recording.
+    // The plugin reads planes[0..2] directly, so guard against non-YUV formats.
+    if (image.planes.length >= 3 &&
+        now - _lastHandProcessMs >= _targetIntervalMs) {
+      _lastHandProcessMs = now;
       _handLandmarker?.processFrame(image, sensorOrientation);
+    }
 
-      final pose = await _detectPose(image, sensorOrientation);
+    // Copy the YUV frame to NV21 synchronously while the buffer is valid.
+    final nv21 = _toNv21Bytes(image);
+    if (nv21 == null) return;
+    _frameQueue.add(
+      _QueuedFrame(
+        nv21: nv21,
+        width: image.width,
+        height: image.height,
+        sensorOrientation: sensorOrientation,
+        timestampMs: now,
+      ),
+    );
+
+    if (!_workerScheduled) {
+      _workerScheduled = true;
+      // Drain on the next microtask so the stream callback returns promptly.
+      scheduleMicrotask(_drainQueue);
+    }
+  }
+
+  Future<void> _drainQueue() async {
+    _workerScheduled = false;
+    if (_workerRunning || _disposed) return;
+    _workerRunning = true;
+    try {
+      while (!_disposed && _frameQueue.isNotEmpty) {
+        // Keep only the newest frame: drop stale frames to stay real-time.
+        final frame = _frameQueue.removeLast();
+        _frameQueue.clear();
+
+        final now = DateTime.now().millisecondsSinceEpoch;
+        if (now - _lastProcessedMs < _targetIntervalMs) continue;
+        _lastProcessedMs = now;
+
+        await _processOne(frame);
+      }
+    } finally {
+      _workerRunning = false;
+    }
+  }
+
+  Future<void> _processOne(_QueuedFrame frame) async {
+    try {
+      // Re-detect pose every 4th frame; reuse the cached pose in between.
+      // Shoulders (the body-centric reference) are near-static during a sign,
+      // so this cuts pose-detection cost ~4x without hurting accuracy.
+      _frameCounter++;
+      PoseLandmarks? pose;
+      if (_frameCounter % 4 == 1 || _lastPose == null) {
+        pose = await _detectPoseFromNv21(
+          frame.nv21,
+          frame.width,
+          frame.height,
+          frame.sensorOrientation,
+        );
+        if (pose != null) _lastPose = pose;
+      } else {
+        pose = _lastPose;
+      }
       final hasPose = pose?.hasPose ?? false;
       final handCount = _latestHands.length;
 
       final elapsed = _recordStartTime != null
-          ? (now - _recordStartTime!.millisecondsSinceEpoch) / 1000.0
+          ? (frame.timestampMs - _recordStartTime!.millisecondsSinceEpoch) /
+                1000.0
           : 0.0;
 
       if (pose == null || !hasPose) {
@@ -252,17 +344,19 @@ class SignRecognitionPipeline {
         return;
       }
 
-      final frame = _extractor.extractFrame(_latestHands, pose);
-      if (frame != null && _isRecording) {
-        final hasHand = handCount > 0 ||
-            (frame.length >= 185 && (frame[183] > 0.5 || frame[184] > 0.5));
+      final extracted = _extractor.extractFrame(_latestHands, pose);
+      if (extracted != null && _isRecording) {
+        final hasHand =
+            handCount > 0 ||
+            (extracted.length >= 185 &&
+                (extracted[183] > 0.5 || extracted[184] > 0.5));
         if (hasHand) {
           _framesWithHandsDuringRecording++;
           _consecutiveNoHandFrames = 0;
 
           if (_recordedFrames.isNotEmpty) {
             final prev = _recordedFrames.last;
-            final movement = _computeHandMovement(prev, frame);
+            final movement = _computeHandMovement(prev, extracted);
             if (movement < 0.035) {
               _consecutiveStationaryFrames++;
             } else {
@@ -274,7 +368,7 @@ class SignRecognitionPipeline {
           _consecutiveStationaryFrames = 0;
         }
 
-        _recordedFrames.add(frame);
+        _recordedFrames.add(extracted);
         _checkAutoStop();
       }
 
@@ -295,14 +389,31 @@ class SignRecognitionPipeline {
       );
     } catch (e) {
       debugPrint('Pipeline frame error: $e');
-    } finally {
-      _isProcessing = false;
     }
   }
 
   void _checkAutoStop() {
-    if (!_autoStopTriggered && _framesWithHandsDuringRecording >= 16) {
-      if (_consecutiveStationaryFrames >= 18 || _consecutiveNoHandFrames >= 14) {
+    if (_autoStopTriggered) return;
+
+    // Safety net: never let a recording run forever. If the signer's hands are
+    // never detected (e.g. poor lighting), the stationary/no-hand counters may
+    // never advance, so force-stop after a max duration.
+    final start = _recordStartTime;
+    if (start != null) {
+      final elapsedMs =
+          DateTime.now().millisecondsSinceEpoch - start.millisecondsSinceEpoch;
+      if (elapsedMs >= 8000) {
+        _autoStopTriggered = true;
+        onAutoStop?.call();
+        return;
+      }
+    }
+
+    if (_framesWithHandsDuringRecording >= 12) {
+      // At ~12 fps: 20 stationary frames ~ 1.7s of stillness, 18 no-hand frames
+      // ~ 1.5s of lowered hands. Lower than before so auto-stop actually fires.
+      if (_consecutiveStationaryFrames >= 20 ||
+          _consecutiveNoHandFrames >= 18) {
         _autoStopTriggered = true;
         onAutoStop?.call();
       }
@@ -355,7 +466,7 @@ class SignRecognitionPipeline {
       frames = rawFrames;
     }
 
-    if (frames.length < 10) {
+    if (frames.length < 5) {
       return RecordedSignResult(
         sentence: '',
         words: const [],
@@ -518,113 +629,95 @@ class SignRecognitionPipeline {
     return out;
   }
 
-  Future<PoseLandmarks?> _detectPose(
-    CameraImage image,
+  Future<PoseLandmarks?> _detectPoseFromNv21(
+    Uint8List nv21,
+    int width,
+    int height,
     int sensorOrientation,
   ) async {
     final detector = _poseDetector;
     if (detector == null) return null;
     try {
-      final inputImage = _cameraImageToInputImage(image, sensorOrientation);
-      if (inputImage == null) return null;
-      final poses = await detector.processImage(inputImage);
-      if (poses.isEmpty) return null;
-      return _poseToLandmarks(poses.first);
-    } catch (e) {
-      debugPrint('_detectPose error: $e');
-      return null;
-    }
-  }
-
-  InputImage? _cameraImageToInputImage(
-    CameraImage image,
-    int sensorOrientation,
-  ) {
-    try {
       final rotation = InputImageRotation.values.firstWhere(
         (r) => r.rawValue == sensorOrientation,
         orElse: () => InputImageRotation.rotation0deg,
       );
-
-      // On Android Camera2/CameraX, frames are multi-plane YUV_420_888.
-      // Google ML Kit's InputImage.fromByteArray strictly requires NV21 format.
-      if (Platform.isAndroid && image.planes.length >= 3) {
-        final nv21 = _yuv420ToNv21(image);
-        return InputImage.fromBytes(
-          bytes: nv21,
-          metadata: InputImageMetadata(
-            size: ui.Size(image.width.toDouble(), image.height.toDouble()),
-            rotation: rotation,
-            format: InputImageFormat.nv21,
-            bytesPerRow: image.width,
-          ),
-        );
-      }
-
-      // Single plane or other platforms (e.g. BGRA8888 on iOS)
-      final allBytes = WriteBuffer();
-      for (final plane in image.planes) {
-        allBytes.putUint8List(plane.bytes);
-      }
-      final bytes = allBytes.done().buffer.asUint8List();
-
-      return InputImage.fromBytes(
-        bytes: bytes,
+      final inputImage = InputImage.fromBytes(
+        bytes: nv21,
         metadata: InputImageMetadata(
-          size: ui.Size(image.width.toDouble(), image.height.toDouble()),
+          size: ui.Size(width.toDouble(), height.toDouble()),
           rotation: rotation,
-          format: InputImageFormatValue.fromRawValue(image.format.raw) ??
-              InputImageFormat.nv21,
-          bytesPerRow: image.planes.first.bytesPerRow,
+          format: InputImageFormat.nv21,
+          bytesPerRow: width,
         ),
       );
-    } catch (_) {
+      final poses = await detector.processImage(inputImage);
+      if (poses.isEmpty) return null;
+      return _poseToLandmarks(poses.first);
+    } catch (e) {
+      debugPrint('_detectPoseFromNv21 error: $e');
       return null;
     }
   }
 
-  /// Converts Android YUV_420_888 (3 separate planes with strides) to flat NV21 byte buffer.
-  Uint8List _yuv420ToNv21(CameraImage image) {
-    final width = image.width;
-    final height = image.height;
-    final yPlane = image.planes[0];
-    final uPlane = image.planes[1];
-    final vPlane = image.planes[2];
-
-    final yBuffer = yPlane.bytes;
-    final uBuffer = uPlane.bytes;
-    final vBuffer = vPlane.bytes;
-
-    final numPixels = width * height;
-    final nv21 = Uint8List(numPixels + (numPixels ~/ 2));
-
-    // Copy Y plane row-by-row respecting row stride
-    int idy = 0;
-    for (int row = 0; row < height; row++) {
-      final srcOffset = row * yPlane.bytesPerRow;
-      nv21.setRange(idy, idy + width, yBuffer, srcOffset);
-      idy += width;
-    }
-
-    // Interleave V and U (NV21 expects V first, then U)
-    final uvHeight = height ~/ 2;
-    final uvWidth = width ~/ 2;
-    final uPixelStride = uPlane.bytesPerPixel ?? 1;
-    final vPixelStride = vPlane.bytesPerPixel ?? 1;
-    final uRowStride = uPlane.bytesPerRow;
-    final vRowStride = vPlane.bytesPerRow;
-
-    int iduv = numPixels;
-    for (int row = 0; row < uvHeight; row++) {
-      for (int col = 0; col < uvWidth; col++) {
-        final vIndex = row * vRowStride + col * vPixelStride;
-        final uIndex = row * uRowStride + col * uPixelStride;
-        nv21[iduv++] = vBuffer[vIndex];
-        nv21[iduv++] = uBuffer[uIndex];
+  /// Converts Android YUV_420_888 (3 separate planes with strides) to flat
+  /// NV21 byte buffer. Called synchronously inside the camera callback while
+  /// the `CameraImage` planes are still valid.
+  Uint8List? _toNv21Bytes(CameraImage image) {
+    try {
+      if (image.planes.length < 3) {
+        // Non-Android / single-plane: concatenate planes as-is.
+        final allBytes = WriteBuffer();
+        for (final plane in image.planes) {
+          allBytes.putUint8List(plane.bytes);
+        }
+        return allBytes.done().buffer.asUint8List();
       }
-    }
 
-    return nv21;
+      final width = image.width;
+      final height = image.height;
+      final yPlane = image.planes[0];
+      final uPlane = image.planes[1];
+      final vPlane = image.planes[2];
+
+      final yBuffer = yPlane.bytes;
+      final uBuffer = uPlane.bytes;
+      final vBuffer = vPlane.bytes;
+
+      final numPixels = width * height;
+      final nv21 = Uint8List(numPixels + (numPixels ~/ 2));
+
+      // Copy Y plane row-by-row respecting row stride
+      int idy = 0;
+      for (int row = 0; row < height; row++) {
+        final srcOffset = row * yPlane.bytesPerRow;
+        nv21.setRange(idy, idy + width, yBuffer, srcOffset);
+        idy += width;
+      }
+
+      // Interleave V and U (NV21 expects V first, then U)
+      final uvHeight = height ~/ 2;
+      final uvWidth = width ~/ 2;
+      final uPixelStride = uPlane.bytesPerPixel ?? 1;
+      final vPixelStride = vPlane.bytesPerPixel ?? 1;
+      final uRowStride = uPlane.bytesPerRow;
+      final vRowStride = vPlane.bytesPerRow;
+
+      int iduv = numPixels;
+      for (int row = 0; row < uvHeight; row++) {
+        for (int col = 0; col < uvWidth; col++) {
+          final vIndex = row * vRowStride + col * vPixelStride;
+          final uIndex = row * uRowStride + col * uPixelStride;
+          nv21[iduv++] = vBuffer[vIndex];
+          nv21[iduv++] = uBuffer[uIndex];
+        }
+      }
+
+      return nv21;
+    } catch (e) {
+      debugPrint('_toNv21Bytes error: $e');
+      return null;
+    }
   }
 
   PoseLandmarks _poseToLandmarks(Pose pose) {
@@ -659,9 +752,30 @@ class SignRecognitionPipeline {
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    _frameQueue.clear();
     await _handSubscription?.cancel();
     _handLandmarker?.dispose();
     await _poseDetector?.close();
     await _controller.close();
   }
+}
+
+/// A frame waiting to be processed by the worker loop.
+///
+/// Holds a copied NV21 byte buffer (not the `CameraImage`, whose planes are
+/// only valid during the camera stream callback).
+class _QueuedFrame {
+  const _QueuedFrame({
+    required this.nv21,
+    required this.width,
+    required this.height,
+    required this.sensorOrientation,
+    required this.timestampMs,
+  });
+
+  final Uint8List nv21;
+  final int width;
+  final int height;
+  final int sensorOrientation;
+  final int timestampMs;
 }

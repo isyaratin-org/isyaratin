@@ -113,9 +113,11 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
   }
 
   Future<void> _setupCameraController(CameraDescription camera) async {
+    // ResolutionPreset.low (480p) jauh lebih cepat untuk pose detection
+    // dibanding medium (720p) — frame rate inference naik signifikan.
     final controller = CameraController(
       camera,
-      ResolutionPreset.medium,
+      ResolutionPreset.low,
       enableAudio: false,
     );
     await controller.initialize();
@@ -237,8 +239,32 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
     showNotice(context, 'Perekaman gerakan dibatalkan.');
   }
 
+  bool _isCameraPaused = false;
+
+  Future<void> _togglePauseCamera() async {
+    final controller = _controller;
+    if (controller == null || !controller.value.isInitialized) return;
+    try {
+      if (_isCameraPaused) {
+        await controller.resumePreview();
+        if (mounted) setState(() => _isCameraPaused = false);
+        if (mounted) showNotice(context, 'Pratinjau kamera dilanjutkan.');
+      } else {
+        if (_isRecording) {
+          _cancelRecording();
+        }
+        await controller.pausePreview();
+        if (mounted) setState(() => _isCameraPaused = true);
+        if (mounted) showNotice(context, 'Pratinjau kamera dijeda.');
+      }
+    } catch (e) {
+      debugPrint('Error toggling camera pause: $e');
+    }
+  }
+
   Future<void> _stopAndRecognize() async {
-    if (!_isRecording || _isAnalyzing) return;
+    if (_isAnalyzing) return;
+    if (!_isRecording) return;
     setState(() {
       _isRecording = false;
       _isAnalyzing = true;
@@ -254,7 +280,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
       });
 
       if (result != null) {
-        if (result.errorMessage != null) {
+        if (result.errorMessage != null && result.errorMessage!.isNotEmpty) {
           showNotice(context, result.errorMessage!);
         } else if (result.sentence.isNotEmpty) {
           setState(() {
@@ -266,7 +292,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
           });
           showNotice(
             context,
-            'Berhasil menerjemahkan ${result.words.length} kata.',
+            'Berhasil menerjemahkan ${result.words.length} kata isyarat.',
           );
         } else {
           showNotice(
@@ -274,6 +300,8 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
             'Tidak ada kata yang terdeteksi dengan yakin. Coba ulangi gerakannya.',
           );
         }
+      } else {
+        showNotice(context, 'Perekaman isyarat selesai.');
       }
     } catch (e, stack) {
       debugPrint('Error recognizing recording: $e\n$stack');
@@ -290,191 +318,253 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
       const StepHeader('Langkah 1 · Kirim Isyarat'),
       Expanded(
         child: ListView(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
           children: [
             Text(
               'Terjemahan Isyarat',
               style: Theme.of(context).textTheme.headlineMedium,
             ),
             const SizedBox(height: 16),
-            Container(
-              height: 350,
-              clipBehavior: Clip.antiAlias,
-              decoration: BoxDecoration(
-                color: const Color(0xFFE0EBED),
-                borderRadius: BorderRadius.circular(24),
-              ),
-              child: _controller != null && _controller!.value.isInitialized
-                  ? Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        CameraPreview(_controller!),
-                        if (_switchingCamera)
-                          Container(
-                            color: Colors.black45,
-                            child: const Center(
-                              child: CircularProgressIndicator(
-                                color: Colors.white,
+            // Camera Viewport in 1:1 Square (Kotak), fitted with center-crop to prevent squashing/gepeng
+            AspectRatio(
+              aspectRatio: 1.0,
+              child: Container(
+                clipBehavior: Clip.antiAlias,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF090D16),
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(
+                    color: AppColors.primary.withValues(alpha: 0.3),
+                    width: 1.5,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.15),
+                      blurRadius: 18,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
+                ),
+                child: _controller != null && _controller!.value.isInitialized
+                    ? LayoutBuilder(
+                        builder: (context, constraints) {
+                          final boxSize = constraints.maxWidth;
+                          // In Flutter camera, controller.value.aspectRatio is sensor width / sensor height (> 1.0).
+                          // In portrait mode, CameraPreview renders with 1 / rawAspect (e.g. 0.75 or 0.5625).
+                          final isPortrait =
+                              MediaQuery.of(context).orientation ==
+                              Orientation.portrait;
+                          final rawAspect = _controller!.value.aspectRatio;
+                          final previewRatio = isPortrait
+                              ? (rawAspect > 1.0 ? 1.0 / rawAspect : rawAspect)
+                              : (rawAspect < 1.0 ? 1.0 / rawAspect : rawAspect);
+
+                          double previewW;
+                          double previewH;
+                          if (previewRatio < 1.0) {
+                            // Portrait camera: height is taller than width
+                            previewW = boxSize;
+                            previewH = boxSize / previewRatio;
+                          } else {
+                            // Landscape camera: width is wider than height
+                            previewW = boxSize * previewRatio;
+                            previewH = boxSize;
+                          }
+
+                          return Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              // Centered, non-gepeng camera preview cropped cleanly into the square
+                              Center(
+                                child: OverflowBox(
+                                  minWidth: previewW,
+                                  maxWidth: previewW,
+                                  minHeight: previewH,
+                                  maxHeight: previewH,
+                                  child: CameraPreview(_controller!),
+                                ),
                               ),
-                            ),
-                          ),
-                        if (_isAnalyzing)
-                          Container(
-                            color: Colors.black54,
-                            child: const Center(
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  CircularProgressIndicator(
-                                    color: Colors.white,
-                                  ),
-                                  SizedBox(height: 16),
-                                  Text(
-                                    'Menerjemahkan kata demi kata...',
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 14,
+
+                              // Viewfinder target framing
+                              _buildViewfinderOverlay(),
+
+                              // Camera Paused overlay
+                              if (_isCameraPaused)
+                                Container(
+                                  color: Colors.black.withValues(alpha: 0.85),
+                                  child: Center(
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Container(
+                                          padding: const EdgeInsets.all(16),
+                                          decoration: BoxDecoration(
+                                            color: Colors.white.withValues(
+                                              alpha: 0.1,
+                                            ),
+                                            shape: BoxShape.circle,
+                                          ),
+                                          child: const Icon(
+                                            Icons.videocam_off_rounded,
+                                            size: 36,
+                                            color: Colors.white70,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 12),
+                                        const Text(
+                                          'Kamera Dijeda',
+                                          style: TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 15,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 10),
+                                        ElevatedButton.icon(
+                                          onPressed: _togglePauseCamera,
+                                          icon: const Icon(
+                                            Icons.play_arrow_rounded,
+                                            size: 20,
+                                          ),
+                                          label: const Text('Lanjutkan Kamera'),
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: AppColors.primary,
+                                            foregroundColor: Colors.white,
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 16,
+                                              vertical: 10,
+                                            ),
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   ),
-                                ],
+                                ),
+
+                              // Camera switching overlay
+                              if (_switchingCamera)
+                                Container(
+                                  color: Colors.black54,
+                                  child: const Center(
+                                    child: CircularProgressIndicator(
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ),
+
+                              // Analyzing overlay
+                              if (_isAnalyzing)
+                                Container(
+                                  color: Colors.black.withValues(alpha: 0.65),
+                                  child: const Center(
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        CircularProgressIndicator(
+                                          color: Colors.white,
+                                        ),
+                                        SizedBox(height: 14),
+                                        Text(
+                                          'Menerjemahkan kata demi kata...',
+                                          style: TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 14,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+
+                              // Status badge (top-left)
+                              Positioned(
+                                top: 12,
+                                left: 12,
+                                child: _buildStatusBadge(),
                               ),
-                            ),
-                          ),
-                        Positioned(
-                          top: 12,
-                          left: 12,
-                          child: ValueListenableBuilder<LiveSignPrediction?>(
-                            valueListenable: _livePrediction,
-                            builder: (context, prediction, _) {
-                              return Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 10,
-                                  vertical: 6,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: _isRecording
-                                      ? Colors.red.shade700
-                                      : Colors.black54,
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
+
+                              // Quick tools (top-right): Pause camera & Flip camera
+                              Positioned(
+                                top: 12,
+                                right: 12,
                                 child: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    if (_isRecording) ...[
-                                      Container(
-                                        width: 10,
-                                        height: 10,
-                                        decoration: const BoxDecoration(
-                                          color: Colors.white,
-                                          shape: BoxShape.circle,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 6),
-                                      Text(
-                                        'MEREKAM ${(prediction?.recordedDurationSeconds ?? 0.0).toStringAsFixed(1)}s · ${prediction?.recordedFrames ?? 0} frame',
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                    ] else ...[
-                                      Icon(
-                                        prediction?.hasPose == true
-                                            ? Icons.check_circle
-                                            : Icons.accessibility_new,
-                                        color: prediction?.hasPose == true
-                                            ? const Color(0xFF4ADE80)
-                                            : Colors.white70,
-                                        size: 14,
-                                      ),
-                                      const SizedBox(width: 6),
-                                      Text(
-                                        prediction?.hasPose == true
-                                            ? 'Tubuh Terdeteksi · Tangan: ${prediction?.handCount ?? 0}'
-                                            : 'Arahkan kamera ke dada & kepala',
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                    ],
+                                    _buildCameraToolbarButton(
+                                      icon: _isCameraPaused
+                                          ? Icons.play_arrow_rounded
+                                          : Icons.pause_rounded,
+                                      tooltip: _isCameraPaused
+                                          ? 'Lanjutkan Kamera'
+                                          : 'Jeda Kamera',
+                                      onPressed:
+                                          _switchingCamera || _isAnalyzing
+                                          ? null
+                                          : _togglePauseCamera,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    _buildCameraToolbarButton(
+                                      icon: Icons.flip_camera_android_rounded,
+                                      tooltip: 'Ganti Kamera Depan/Belakang',
+                                      onPressed:
+                                          _switchingCamera || _isRecording
+                                          ? null
+                                          : _switchCamera,
+                                    ),
                                   ],
                                 ),
-                              );
-                            },
-                          ),
-                        ),
-                        Positioned(
-                          top: 12,
-                          right: 12,
-                          child: FloatingActionButton.small(
-                            heroTag: 'camera-switch',
-                            tooltip: 'Ganti Kamera Depan/Belakang',
-                            backgroundColor: Colors.white.withValues(
-                              alpha: 0.9,
-                            ),
-                            foregroundColor: AppColors.primary,
-                            onPressed: _switchingCamera || _isRecording
-                                ? null
-                                : _switchCamera,
-                            child: const Icon(Icons.flip_camera_android),
-                          ),
-                        ),
-                        if (_isRecording)
-                          Positioned(
-                            bottom: 12,
-                            right: 12,
-                            child: FloatingActionButton(
-                              heroTag: 'camera-stop',
-                              tooltip: 'Selesai & Terjemahkan',
-                              backgroundColor: Colors.red.shade700,
-                              foregroundColor: Colors.white,
-                              onPressed: _isAnalyzing
-                                  ? null
-                                  : _stopAndRecognize,
-                              child: _isAnalyzing
-                                  ? const SizedBox(
-                                      width: 22,
-                                      height: 22,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2.5,
-                                        color: Colors.white,
+                              ),
+
+                              // Bottom-right floating stop button when recording
+                              if (_isRecording)
+                                Positioned(
+                                  bottom: 12,
+                                  right: 12,
+                                  child: FloatingActionButton.extended(
+                                    heroTag: 'camera-stop-fab',
+                                    tooltip: 'Berhenti & Terjemahkan Gerakan',
+                                    backgroundColor: Colors.red.shade700,
+                                    foregroundColor: Colors.white,
+                                    onPressed: _isAnalyzing
+                                        ? null
+                                        : _stopAndRecognize,
+                                    icon: _isAnalyzing
+                                        ? const SizedBox(
+                                            width: 18,
+                                            height: 18,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                              color: Colors.white,
+                                            ),
+                                          )
+                                        : const Icon(
+                                            Icons.stop_rounded,
+                                            size: 24,
+                                          ),
+                                    label: Text(
+                                      _isAnalyzing
+                                          ? 'Menganalisis...'
+                                          : 'Berhenti',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
                                       ),
-                                    )
-                                  : const Icon(Icons.stop_rounded, size: 28),
-                            ),
-                          ),
-                      ],
-                    )
-                  : Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const DesignIcon(
-                          '66bd1',
-                          size: 40,
-                          color: AppColors.primary,
-                        ),
-                        const SizedBox(height: 20),
-                        Text(
-                          _cameraUnavailable
-                              ? 'Kamera tidak tersedia'
-                              : 'Menyiapkan kamera...',
-                          textAlign: TextAlign.center,
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
-                        const SizedBox(height: 10),
-                        const Text(
-                          'Kamu bisa memulai percakapan dengan mengetik pesan di bawah.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: AppColors.muted),
-                        ),
-                      ],
-                    ),
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          );
+                        },
+                      )
+                    : _buildCameraPlaceholder(context),
+              ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 16),
+            // Recording Controls Card
             SurfaceCard(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -484,21 +574,21 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
                       children: [
                         Expanded(
                           child: ElevatedButton.icon(
-                            onPressed: _stopAndRecognize,
+                            onPressed: _isAnalyzing ? null : _stopAndRecognize,
                             icon: const Icon(
                               Icons.stop_circle_rounded,
                               size: 22,
                               color: Colors.white,
                             ),
                             label: const Text(
-                              'Selesai & Terjemahkan',
+                              'Berhenti & Terjemahkan',
                               style: TextStyle(
                                 fontSize: 14,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.primary,
+                              backgroundColor: Colors.red.shade700,
                               foregroundColor: Colors.white,
                               padding: const EdgeInsets.symmetric(vertical: 14),
                               shape: RoundedRectangleBorder(
@@ -512,9 +602,10 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
                           onPressed: _cancelRecording,
                           style: OutlinedButton.styleFrom(
                             foregroundColor: Colors.redAccent,
+                            side: const BorderSide(color: Colors.redAccent),
                             padding: const EdgeInsets.symmetric(
                               vertical: 14,
-                              horizontal: 14,
+                              horizontal: 16,
                             ),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(14),
@@ -526,7 +617,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
                     ),
                     const SizedBox(height: 8),
                     const Text(
-                      'Peragakan satu atau rangkaian kata isyarat. Tekan Selesai atau turunkan tangan untuk menerjemahkan.',
+                      'Peragakan gerakan isyarat. Tekan Berhenti & Terjemahkan saat selesai.',
                       style: TextStyle(fontSize: 12, color: AppColors.muted),
                       textAlign: TextAlign.center,
                     ),
@@ -560,7 +651,8 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
                       onPressed:
                           _model == null ||
                               _controller == null ||
-                              !_controller!.value.isInitialized
+                              !_controller!.value.isInitialized ||
+                              _isCameraPaused
                           ? null
                           : _startRecording,
                       icon: const Icon(
@@ -576,7 +668,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
                         ),
                       ),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF146C74),
+                        backgroundColor: AppColors.primary,
                         foregroundColor: Colors.white,
                         padding: const EdgeInsets.symmetric(vertical: 14),
                         shape: RoundedRectangleBorder(
@@ -586,7 +678,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
                     ),
                     const SizedBox(height: 8),
                     const Text(
-                      'Rekam gerakan total terlebih dahulu. Setelah berhenti atau menekan selesai, model akan menganalisis gerakan perkata.',
+                      'Rekam gerakan total di depan kamera, lalu tekan Berhenti untuk menganalisis perkata.',
                       style: TextStyle(fontSize: 12, color: AppColors.muted),
                       textAlign: TextAlign.center,
                     ),
@@ -595,14 +687,14 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
               ),
             ),
             if (_lastResult != null && _lastResult!.words.isNotEmpty) ...[
-              const SizedBox(height: 12),
+              const SizedBox(height: 16),
               Container(
-                padding: const EdgeInsets.all(14),
+                padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFE6F5F7),
-                  borderRadius: BorderRadius.circular(16),
+                  color: const Color(0xFFE8F6F7),
+                  borderRadius: BorderRadius.circular(18),
                   border: Border.all(
-                    color: const Color(0xFF146C74).withValues(alpha: 0.25),
+                    color: AppColors.primary.withValues(alpha: 0.25),
                   ),
                 ),
                 child: Column(
@@ -611,7 +703,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
                     Row(
                       children: [
                         const Icon(
-                          Icons.auto_awesome,
+                          Icons.auto_awesome_rounded,
                           color: AppColors.primary,
                           size: 18,
                         ),
@@ -619,7 +711,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
                         Text(
                           'Hasil Terjemahan (${_lastResult!.words.length} Kata):',
                           style: const TextStyle(
-                            fontSize: 13,
+                            fontSize: 13.5,
                             fontWeight: FontWeight.bold,
                             color: AppColors.primary,
                           ),
@@ -628,13 +720,13 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
                         Text(
                           '${_lastResult!.durationSeconds.toStringAsFixed(1)}s · ${_lastResult!.totalFrames} frame',
                           style: const TextStyle(
-                            fontSize: 11,
+                            fontSize: 11.5,
                             color: AppColors.muted,
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 12),
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
@@ -649,10 +741,15 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
                               color: Colors.white,
                               borderRadius: BorderRadius.circular(10),
                               border: Border.all(
-                                color: const Color(
-                                  0xFF146C74,
-                                ).withValues(alpha: 0.2),
+                                color: AppColors.primary.withValues(alpha: 0.2),
                               ),
+                              boxShadow: const [
+                                BoxShadow(
+                                  color: Color(0x08163A42),
+                                  blurRadius: 4,
+                                  offset: Offset(0, 2),
+                                ),
+                              ],
                             ),
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
@@ -698,17 +795,41 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Row(
+                  Row(
                     children: [
-                      DesignIcon('a20f6', size: 18),
-                      SizedBox(width: 8),
-                      Text(
+                      const DesignIcon('a20f6', size: 18),
+                      const SizedBox(width: 8),
+                      const Text(
                         'Pesan terjemahan / ketik',
                         style: TextStyle(
                           color: AppColors.primary,
-                          fontWeight: FontWeight.w600,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 13.5,
                         ),
                       ),
+                      const Spacer(),
+                      if (_text.text.isNotEmpty)
+                        TextButton(
+                          onPressed: () {
+                            _text.clear();
+                            setState(() {});
+                          },
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          child: const Text(
+                            'Hapus',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: AppColors.muted,
+                            ),
+                          ),
+                        ),
                     ],
                   ),
                   const SizedBox(height: 12),
@@ -736,8 +857,304 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
           ],
         ),
       ),
+      // Bar rekam persisten: tombol berhenti SELALU terlihat saat merekam
+      if (_isRecording) _buildRecordingBar(),
     ],
   );
+
+  Widget _buildStatusBadge() {
+    return ValueListenableBuilder<LiveSignPrediction?>(
+      valueListenable: _livePrediction,
+      builder: (context, prediction, _) {
+        final isRec = _isRecording;
+        final hasPose = prediction?.hasPose == true;
+        final hands = prediction?.handCount ?? 0;
+        final duration = (prediction?.recordedDurationSeconds ?? 0.0)
+            .toStringAsFixed(1);
+        final frames = prediction?.recordedFrames ?? 0;
+
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: isRec
+                ? Colors.red.shade700.withValues(alpha: 0.9)
+                : Colors.black.withValues(alpha: 0.65),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: isRec
+                  ? Colors.red.shade300.withValues(alpha: 0.5)
+                  : Colors.white.withValues(alpha: 0.2),
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (isRec) ...[
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: const BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  'MEREKAM ${duration}s · $frames f',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ] else ...[
+                Icon(
+                  hasPose
+                      ? Icons.check_circle_rounded
+                      : Icons.accessibility_new_rounded,
+                  color: hasPose ? const Color(0xFF4ADE80) : Colors.white70,
+                  size: 14,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  hasPose
+                      ? 'Tubuh Terdeteksi · Tangan: $hands'
+                      : 'Arahkan dada & kepala ke kotak',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildCameraToolbarButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback? onPressed,
+  }) {
+    return Material(
+      color: Colors.black.withValues(alpha: 0.55),
+      shape: const CircleBorder(),
+      clipBehavior: Clip.antiAlias,
+      child: IconButton(
+        tooltip: tooltip,
+        iconSize: 20,
+        constraints: const BoxConstraints(minWidth: 38, minHeight: 38),
+        padding: const EdgeInsets.all(8),
+        color: Colors.white,
+        disabledColor: Colors.white30,
+        onPressed: onPressed,
+        icon: Icon(icon),
+      ),
+    );
+  }
+
+  Widget _buildViewfinderOverlay() {
+    return IgnorePointer(
+      child: Center(
+        child: Container(
+          margin: const EdgeInsets.all(32),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.12),
+              width: 1,
+            ),
+          ),
+          child: Stack(
+            children: [
+              Positioned(
+                top: 0,
+                left: 0,
+                child: Container(
+                  width: 18,
+                  height: 18,
+                  decoration: const BoxDecoration(
+                    border: Border(
+                      top: BorderSide(color: Color(0xFF4ADE80), width: 2.5),
+                      left: BorderSide(color: Color(0xFF4ADE80), width: 2.5),
+                    ),
+                    borderRadius: BorderRadius.only(
+                      topLeft: Radius.circular(18),
+                    ),
+                  ),
+                ),
+              ),
+              Positioned(
+                top: 0,
+                right: 0,
+                child: Container(
+                  width: 18,
+                  height: 18,
+                  decoration: const BoxDecoration(
+                    border: Border(
+                      top: BorderSide(color: Color(0xFF4ADE80), width: 2.5),
+                      right: BorderSide(color: Color(0xFF4ADE80), width: 2.5),
+                    ),
+                    borderRadius: BorderRadius.only(
+                      topRight: Radius.circular(18),
+                    ),
+                  ),
+                ),
+              ),
+              Positioned(
+                bottom: 0,
+                left: 0,
+                child: Container(
+                  width: 18,
+                  height: 18,
+                  decoration: const BoxDecoration(
+                    border: Border(
+                      bottom: BorderSide(color: Color(0xFF4ADE80), width: 2.5),
+                      left: BorderSide(color: Color(0xFF4ADE80), width: 2.5),
+                    ),
+                    borderRadius: BorderRadius.only(
+                      bottomLeft: Radius.circular(18),
+                    ),
+                  ),
+                ),
+              ),
+              Positioned(
+                bottom: 0,
+                right: 0,
+                child: Container(
+                  width: 18,
+                  height: 18,
+                  decoration: const BoxDecoration(
+                    border: Border(
+                      bottom: BorderSide(color: Color(0xFF4ADE80), width: 2.5),
+                      right: BorderSide(color: Color(0xFF4ADE80), width: 2.5),
+                    ),
+                    borderRadius: BorderRadius.only(
+                      bottomRight: Radius.circular(18),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCameraPlaceholder(BuildContext context) {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        const DesignIcon('66bd1', size: 40, color: AppColors.primary),
+        const SizedBox(height: 16),
+        Text(
+          _cameraUnavailable ? 'Kamera tidak tersedia' : 'Menyiapkan kamera...',
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
+        const SizedBox(height: 8),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 24),
+          child: Text(
+            'Kamu bisa memulai percakapan dengan mengetik pesan di bawah.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: AppColors.muted, fontSize: 13),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildRecordingBar() {
+    return ValueListenableBuilder<LiveSignPrediction?>(
+      valueListenable: _livePrediction,
+      builder: (context, prediction, _) {
+        final duration = (prediction?.recordedDurationSeconds ?? 0.0)
+            .toStringAsFixed(1);
+        final frames = prediction?.recordedFrames ?? 0;
+
+        return Material(
+          color: const Color(0xFF0F172A),
+          elevation: 10,
+          child: SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+              child: Row(
+                children: [
+                  Container(
+                    width: 10,
+                    height: 10,
+                    decoration: const BoxDecoration(
+                      color: Colors.redAccent,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'MEREKAM ${duration}s · $frames frame',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton(
+                    onPressed: _cancelRecording,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      side: const BorderSide(color: Colors.white54),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                    child: const Text('Batal'),
+                  ),
+                  const SizedBox(width: 8),
+                  ElevatedButton.icon(
+                    onPressed: _isAnalyzing ? null : _stopAndRecognize,
+                    icon: _isAnalyzing
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Icon(Icons.stop_rounded, size: 20),
+                    label: Text(_isAnalyzing ? 'Memproses...' : 'Berhenti'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red.shade700,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
 }
 
 class ReplyScreen extends ConsumerStatefulWidget {
@@ -932,8 +1349,18 @@ class _ReplyScreenState extends ConsumerState<ReplyScreen> {
                   maxLength: 5000,
                   enabled: !_saving,
                   onChanged: (_) => setState(() {}),
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     hintText: 'Ketik atau rekam balasan suara di sini...',
+                    suffixIcon: _text.text.isNotEmpty
+                        ? IconButton(
+                            tooltip: 'Hapus teks',
+                            icon: const Icon(Icons.clear, size: 18),
+                            onPressed: () {
+                              _text.clear();
+                              setState(() {});
+                            },
+                          )
+                        : null,
                   ),
                 ),
                 if (_listening) ...[
@@ -985,7 +1412,7 @@ class _ReplyScreenState extends ConsumerState<ReplyScreen> {
                     ),
                   ),
                 ],
-                const SizedBox(height: 32),
+                const SizedBox(height: 24),
                 Row(
                   children: [
                     Expanded(
@@ -998,9 +1425,9 @@ class _ReplyScreenState extends ConsumerState<ReplyScreen> {
                               : AppColors.primary,
                         ),
                         label: Text(
-                          _listening
-                              ? 'Berhenti Bicara'
-                              : 'Bicara (Voice Note)',
+                          _listening ? 'Berhenti Bicara' : 'Bicara Suara',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             color: _listening ? Colors.redAccent : null,
                             fontWeight: FontWeight.w600,
@@ -1024,12 +1451,16 @@ class _ReplyScreenState extends ConsumerState<ReplyScreen> {
                           color: AppColors.primary,
                           size: 20,
                         ),
-                        label: Text(_speaking ? 'Hentikan' : 'Bacakan Balasan'),
+                        label: Text(
+                          _speaking ? 'Hentikan' : 'Bacakan Teks',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 12),
                 FilledButton.icon(
                   onPressed: _saving || _text.text.trim().isEmpty
                       ? null
@@ -1074,20 +1505,36 @@ class _AvatarScreenState extends ConsumerState<AvatarScreen> {
   WebViewController? _controller;
   bool _isLoading = true;
   bool _avatarReady = false;
-  String _selectedMotionId = 'rumah';
-  String _activeGloss = 'Rumah';
+  String _selectedMotionId = '';
+  String _activeGloss = '';
   double _currentSpeed = 1.0;
   bool _isPlaying = true;
   String? _detectedGestureName;
+  Timer? _loadingTimeoutTimer;
+  Timer? _verificationTimer;
+  final _speech = SpeechService();
+  bool _speechStarted = false;
 
   @override
   void initState() {
     super.initState();
+    // Default ke gerakan pertama dari manifest (jika sudah dimuat).
+    final motions = AvatarMotionService.instance.motions;
+    if (motions.isNotEmpty) {
+      _selectedMotionId = motions.first.id;
+      _activeGloss = motions.first.gloss;
+    } else {
+      _selectedMotionId = '100_ribu_rupiah';
+      _activeGloss = '100 ribu rupiah';
+    }
     _initAvatarViewer();
   }
 
   @override
   void dispose() {
+    _loadingTimeoutTimer?.cancel();
+    _verificationTimer?.cancel();
+    _speech.dispose();
     // Hentikan server HTTP lokal agar tidak ada timer/port yang bocor
     // saat layar avatar ditutup (penting untuk test & kebersihan resource).
     AvatarMotionService.instance.stopServer();
@@ -1109,9 +1556,38 @@ class _AvatarScreenState extends ConsumerState<AvatarScreen> {
         }
       }
 
+      // Pasang safety timeout agar tidak hang selamanya jika perangkat lambat
+      _loadingTimeoutTimer?.cancel();
+      _loadingTimeoutTimer = Timer(const Duration(seconds: 8), () {
+        if (mounted && _isLoading) {
+          debugPrint(
+            '[AvatarScreen] Loading timeout (8s) - melepaskan blocker overlay.',
+          );
+          setState(() {
+            _isLoading = false;
+          });
+        }
+      });
+
       final controller = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..setBackgroundColor(const Color(0xFF090D16))
+        ..setOnConsoleMessage((JavaScriptConsoleMessage msg) {
+          debugPrint('[Avatar JS Console]: ${msg.message}');
+        })
+        ..setNavigationDelegate(
+          NavigationDelegate(
+            onWebResourceError: (WebResourceError error) {
+              debugPrint(
+                '[Avatar WebView Error]: ${error.errorCode} - ${error.description} (URL: ${error.url})',
+              );
+            },
+            onPageFinished: (String url) {
+              debugPrint('[Avatar WebView Page Finished]: $url');
+              _startStatusVerification();
+            },
+          ),
+        )
         ..addJavaScriptChannel(
           'FlutterBridge',
           onMessageReceived: (JavaScriptMessage msg) {
@@ -1135,10 +1611,56 @@ class _AvatarScreenState extends ConsumerState<AvatarScreen> {
     }
   }
 
+  void _startStatusVerification() {
+    _verificationTimer?.cancel();
+    int attempts = 0;
+    _verificationTimer = Timer.periodic(const Duration(milliseconds: 600), (
+      timer,
+    ) async {
+      attempts++;
+      if (!mounted || _avatarReady) {
+        timer.cancel();
+        return;
+      }
+      if (attempts > 15) {
+        timer.cancel();
+        return;
+      }
+      try {
+        final result = await _controller?.runJavaScriptReturningResult(
+          'Boolean(window.isAvatarReady)',
+        );
+        if (result == true || result == 'true') {
+          timer.cancel();
+          _loadingTimeoutTimer?.cancel();
+          if (mounted) {
+            setState(() {
+              _avatarReady = true;
+              _isLoading = false;
+            });
+            _controller?.runJavaScript("loadMotion('$_selectedMotionId')");
+            _speakReply();
+          }
+        }
+      } catch (_) {}
+    });
+  }
+
+  /// Membacakan teks balasan (voice note) saat avatar siap merespon.
+  Future<void> _speakReply() async {
+    if (_speechStarted) return;
+    final reply = ref.read(sessionProvider).replyText;
+    if (reply == null || reply.trim().isEmpty) return;
+    _speechStarted = true;
+    await _speech.speak(reply);
+  }
+
   void _handleJsMessage(String message) {
     try {
       debugPrint('[AvatarScreen JS]: $message');
       if (message.contains('avatar_ready')) {
+        _loadingTimeoutTimer?.cancel();
+        _verificationTimer?.cancel();
         if (mounted) {
           setState(() {
             _avatarReady = true;
@@ -1146,6 +1668,18 @@ class _AvatarScreenState extends ConsumerState<AvatarScreen> {
           });
           // Muat gerakan terpilih
           _controller?.runJavaScript("loadMotion('$_selectedMotionId')");
+          // Bacakan balasan sebagai voice note
+          _speakReply();
+        }
+      } else if (message.contains('avatar_error') ||
+          message.contains('js_error')) {
+        debugPrint('[AvatarScreen] Avatar JS reported error: $message');
+        _loadingTimeoutTimer?.cancel();
+        _verificationTimer?.cancel();
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+          });
         }
       } else if (message.contains('motion_loaded')) {
         if (mounted) {
@@ -1218,6 +1752,14 @@ class _AvatarScreenState extends ConsumerState<AvatarScreen> {
               setState(() {
                 _isLoading = true;
                 _avatarReady = false;
+              });
+              _loadingTimeoutTimer?.cancel();
+              _loadingTimeoutTimer = Timer(const Duration(seconds: 8), () {
+                if (mounted && _isLoading) {
+                  setState(() {
+                    _isLoading = false;
+                  });
+                }
               });
               _controller?.reload();
             },
@@ -1355,18 +1897,40 @@ class _AvatarScreenState extends ConsumerState<AvatarScreen> {
                   if (_isLoading)
                     Container(
                       color: const Color(0xFF090D16),
-                      child: const Center(
+                      child: Center(
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            CircularProgressIndicator(color: Color(0xFF14B8A6)),
-                            SizedBox(height: 14),
-                            Text(
+                            const CircularProgressIndicator(
+                              color: Color(0xFF14B8A6),
+                            ),
+                            const SizedBox(height: 14),
+                            const Text(
                               'Menyiapkan Avatar 3D & Rig 54 Tulang...',
                               style: TextStyle(
                                 color: Colors.white,
                                 fontSize: 13,
                                 fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            TextButton.icon(
+                              onPressed: () {
+                                setState(() {
+                                  _isLoading = false;
+                                });
+                              },
+                              icon: const Icon(
+                                Icons.visibility_outlined,
+                                size: 14,
+                                color: Color(0xFF14B8A6),
+                              ),
+                              label: const Text(
+                                'Buka Tampilan 3D Langsung',
+                                style: TextStyle(
+                                  color: Color(0xFF14B8A6),
+                                  fontSize: 11,
+                                ),
                               ),
                             ),
                           ],

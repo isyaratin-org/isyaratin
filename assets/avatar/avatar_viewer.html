@@ -1,0 +1,1077 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BISINDO 3D Avatar Motion Player</title>
+  <meta name="description" content="Player GUI 3D Avatar interaktif untuk visualisasi dan verifikasi gerakan bahasa isyarat BISINDO berbasis video MediaPipe.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- Three.js + GLTFLoader + OrbitControls (CDN) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+
+  <style>
+    :root {
+      --bg-dark: #090d16;
+      --bg-panel: rgba(17, 24, 39, 0.85);
+      --border-color: rgba(255, 255, 255, 0.08);
+      --border-glow: rgba(99, 102, 241, 0.4);
+      --primary: #6366f1;
+      --primary-light: #818cf8;
+      --accent-cyan: #06b6d4;
+      --accent-emerald: #10b981;
+      --accent-rose: #f43f5e;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+      --radius-sm: 8px;
+      --radius-md: 12px;
+      --radius-lg: 16px;
+      --font-sans: 'Plus Jakarta Sans', system-ui, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Header Bar */
+    header.top-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 24px;
+      background: var(--bg-panel);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border-color);
+      z-index: 10;
+    }
+
+    .brand-title {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-icon {
+      font-size: 24px;
+      width: 40px;
+      height: 40px;
+      background: linear-gradient(135deg, var(--primary), var(--accent-cyan));
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 16px rgba(99, 102, 241, 0.3);
+    }
+
+    .brand-text h1 {
+      font-size: 16px;
+      font-weight: 800;
+      letter-spacing: -0.01em;
+      color: #ffffff;
+    }
+
+    .brand-text p {
+      font-size: 11.5px;
+      color: var(--text-muted);
+    }
+
+    .header-badges {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .motion-selector-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(255, 255, 255, 0.05);
+      padding: 4px 10px;
+      border-radius: var(--radius-sm);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+    }
+
+    .motion-selector-wrap label {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .motion-select-styled {
+      background: #0f172a;
+      color: #38bdf8;
+      font-family: var(--font-sans);
+      font-size: 13px;
+      font-weight: 700;
+      padding: 5px 12px;
+      border-radius: var(--radius-sm);
+      border: 1px solid rgba(56, 189, 248, 0.5);
+      outline: none;
+      cursor: pointer;
+      box-shadow: 0 0 10px rgba(56, 189, 248, 0.15);
+      transition: all 0.2s ease;
+    }
+
+    .motion-select-styled:hover, .motion-select-styled:focus {
+      border-color: #38bdf8;
+      box-shadow: 0 0 14px rgba(56, 189, 248, 0.35);
+      background: #1e293b;
+    }
+
+    .badge-pill {
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 12px;
+      border-radius: 999px;
+      background: rgba(99, 102, 241, 0.15);
+      border: 1px solid rgba(99, 102, 241, 0.35);
+      color: var(--primary-light);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .pulse-dot {
+      width: 7px;
+      height: 7px;
+      background-color: #10b981;
+      border-radius: 50%;
+      box-shadow: 0 0 6px #10b981;
+    }
+
+    /* Main Workspace (Dual Viewport) */
+    .workspace-grid {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 420px 1fr;
+      position: relative;
+      overflow: hidden;
+    }
+
+    @media (max-width: 900px) {
+      .workspace-grid {
+        grid-template-columns: 1fr;
+        grid-template-rows: 240px 1fr;
+      }
+    }
+
+    /* Left Panel: Reference Video */
+    .video-panel {
+      background: #060911;
+      border-right: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      padding: 16px;
+      gap: 14px;
+    }
+
+    .panel-header {
+      font-size: 12.5px;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .video-wrapper {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: #000000;
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      border: 1px solid var(--border-color);
+    }
+
+    video.ref-video {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+
+    .video-meta-box {
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      padding: 12px;
+      font-size: 12px;
+    }
+
+    .meta-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 4px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+    }
+
+    .meta-row:last-child {
+      border-bottom: none;
+    }
+
+    .meta-key {
+      color: var(--text-muted);
+    }
+
+    .meta-val {
+      font-family: var(--font-mono);
+      font-weight: 600;
+      color: #ffffff;
+    }
+
+    /* Bone Activity Monitor */
+    .bone-monitor-box {
+      flex: 1;
+      background: rgba(15, 23, 42, 0.4);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      padding: 12px;
+      overflow-y: auto;
+      font-family: var(--font-mono);
+      font-size: 11px;
+    }
+
+    .bone-chip {
+      display: inline-block;
+      padding: 2px 6px;
+      margin: 2px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 4px;
+      color: #cbd5e1;
+    }
+
+    .bone-chip.active {
+      background: rgba(16, 185, 129, 0.2);
+      border: 1px solid rgba(16, 185, 129, 0.4);
+      color: #34d399;
+    }
+
+    /* Right Panel: 3D Avatar Viewport */
+    .viewport-panel {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      background: radial-gradient(circle at 50% 40%, #1e293b 0%, #090d16 80%);
+    }
+
+    #threeCanvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    /* Floating Viewport Overlays */
+    .cam-presets {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      display: flex;
+      gap: 6px;
+      background: var(--bg-panel);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--border-color);
+      padding: 4px;
+      border-radius: var(--radius-sm);
+      z-index: 5;
+    }
+
+    .btn-cam {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      padding: 6px 12px;
+      font-size: 11.5px;
+      font-weight: 600;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .btn-cam:hover {
+      color: #ffffff;
+      background: rgba(255, 255, 255, 0.06);
+    }
+
+    .btn-cam.active {
+      background: var(--primary);
+      color: #ffffff;
+    }
+
+    /* Bottom Control Bar */
+    .bottom-bar {
+      background: var(--bg-panel);
+      backdrop-filter: blur(16px);
+      border-top: 1px solid var(--border-color);
+      padding: 12px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      z-index: 10;
+    }
+
+    .scrubber-wrap {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      width: 100%;
+    }
+
+    .time-display {
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+      color: var(--primary-light);
+      min-width: 110px;
+      font-weight: 600;
+    }
+
+    .progress-slider {
+      flex: 1;
+      height: 6px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.1);
+      outline: none;
+      -webkit-appearance: none;
+      cursor: pointer;
+    }
+
+    .progress-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--primary);
+      box-shadow: 0 0 10px var(--primary-light);
+      cursor: pointer;
+      border: 2px solid #ffffff;
+    }
+
+    .actions-wrap {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .playback-btns {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .btn-ctrl {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border-color);
+      color: var(--text-main);
+      padding: 8px 16px;
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s;
+    }
+
+    .btn-ctrl:hover {
+      background: rgba(255, 255, 255, 0.12);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .btn-ctrl.btn-primary {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: #ffffff;
+      box-shadow: 0 0 16px rgba(99, 102, 241, 0.3);
+    }
+
+    .speed-select {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border-color);
+      color: #ffffff;
+      padding: 7px 12px;
+      border-radius: var(--radius-sm);
+      font-size: 12.5px;
+      outline: none;
+      cursor: pointer;
+    }
+
+    .speed-select option {
+      background: #0f172a;
+    }
+
+    /* Loading Overlay */
+    .loading-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(9, 13, 22, 0.9);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      z-index: 50;
+      transition: opacity 0.3s;
+    }
+
+    .spinner {
+      width: 44px;
+      height: 44px;
+      border: 3px solid rgba(255, 255, 255, 0.1);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Navigation Bar -->
+  <header class="top-bar">
+    <div class="brand-title">
+      <div class="brand-icon">🤟</div>
+      <div class="brand-text">
+        <h1>BISINDO 3D Avatar Motion Player</h1>
+        <p>Video-Driven Retargeting: MediaPipe Landmarks &rarr; Skinned Humanoid Rig</p>
+      </div>
+    </div>
+    <div class="header-badges">
+      <div class="motion-selector-wrap">
+        <label for="motionSelect">Pilih Gerakan:</label>
+        <select id="motionSelect" class="motion-select-styled" onchange="switchMotion(this.value)">
+          <option selected>Memuat dataset manual...</option>
+        </select>
+      </div>
+      <div class="badge-pill">
+        <div class="pulse-dot"></div>
+        <span>Rig: 54 Bones (Full Fingers)</span>
+      </div>
+      <div class="badge-pill" id="badgeGloss" style="border-color:rgba(6,182,212,0.4); color:var(--accent-cyan);">
+        <span>Dataset: Manual</span>
+      </div>
+      <a href="pose_studio.html" style="color:var(--accent-cyan); border:1px solid rgba(6,182,212,0.5); text-decoration:none; display:inline-flex; align-items:center; gap:6px; background:rgba(6,182,212,0.12); padding:5px 12px; border-radius:8px; font-size:12px; font-weight:700; transition:all 0.2s;" onmouseover="this.style.background='rgba(6,182,212,0.25)'" onmouseout="this.style.background='rgba(6,182,212,0.12)'">
+        🎨 Buka Pose Studio (Custom) &rarr;
+      </a>
+    </div>
+  </header>
+
+  <!-- Workspace Grid -->
+  <div class="workspace-grid">
+    
+    <!-- Left: Video Reference & Diagnostics -->
+    <div class="video-panel">
+      <div class="panel-header">
+        <span>📹 Video Sumber Asli</span>
+        <span id="videoFpsBadge" style="font-family:var(--font-mono); font-size:11px; color:#34d399;">30.0 FPS</span>
+      </div>
+
+      <div class="video-wrapper">
+        <video id="refVideo" class="ref-video" playsinline muted></video>
+      </div>
+
+      <div class="video-meta-box">
+        <div class="meta-row">
+          <span class="meta-key">File Video:</span>
+          <span class="meta-val" id="metaVideoFile">Memuat...</span>
+        </div>
+        <div class="meta-row">
+          <span class="meta-key">Kata Isyarat (Gloss):</span>
+          <span class="meta-val" id="metaGloss" style="color:#38bdf8;">Dataset Manual</span>
+        </div>
+        <div class="meta-row">
+          <span class="meta-key">Total Frame Gerak:</span>
+          <span class="meta-val" id="metaFrames">—</span>
+        </div>
+        <div class="meta-row">
+          <span class="meta-key">Durasi Total:</span>
+          <span class="meta-val" id="metaDuration">—</span>
+        </div>
+      </div>
+
+      <div class="panel-header" style="margin-top:6px;">
+        <span>🦴 Sendi Tangan Aktif (Kinematics)</span>
+      </div>
+      <div class="bone-monitor-box" id="boneMonitor">
+        <!-- Diisi otomatis oleh script -->
+      </div>
+    </div>
+
+    <!-- Right: Three.js WebGL 3D Viewport -->
+    <div class="viewport-panel">
+      <!-- Camera Presets -->
+      <div class="cam-presets">
+        <button class="btn-cam active" onclick="setCameraPreset('upper')">Upper Body</button>
+        <button class="btn-cam" onclick="setCameraPreset('rightHand')">Right Hand (Zoom)</button>
+        <button class="btn-cam" onclick="setCameraPreset('leftHand')">Left Hand</button>
+        <button class="btn-cam" onclick="setCameraPreset('torso')">Torso</button>
+      </div>
+
+      <!-- Loading State -->
+      <div id="loadingOverlay" class="loading-overlay">
+        <div class="spinner"></div>
+        <div style="font-weight:600; font-size:14px; color:#ffffff;">Memuat Model 3D man-rigged.glb & Motion Data...</div>
+        <div style="font-size:12px; color:var(--text-muted);">Menghubungkan 54 sendi tulang skeleton...</div>
+      </div>
+
+      <canvas id="threeCanvas"></canvas>
+    </div>
+
+  </div>
+
+  <!-- Bottom Playback Controls -->
+  <div class="bottom-bar">
+    <div class="scrubber-wrap">
+      <div class="time-display" id="timeDisplay">0.00s / —</div>
+      <input type="range" id="progressSlider" class="progress-slider" min="0" max="100" value="0" step="0.1">
+      <div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-muted);" id="frameDisplay">F: —</div>
+    </div>
+
+    <div class="actions-wrap">
+      <div class="playback-btns">
+        <button id="btnPlayPause" class="btn-ctrl btn-primary" onclick="togglePlay()">
+          ▶ Putar Gerakan
+        </button>
+        <button class="btn-ctrl" onclick="restartAnimation()">
+          ⏮ Ulangi
+        </button>
+        <button class="btn-ctrl" onclick="resetToRestPose()">
+          🧍 Reset Netral
+        </button>
+      </div>
+
+      <div style="display:flex; align-items:center; gap:12px;">
+        <span style="font-size:12px; color:var(--text-muted);">Kecepatan:</span>
+        <select id="speedSelect" class="speed-select" onchange="changeSpeed(this.value)">
+          <option value="0.25">0.25x (Super Slow)</option>
+          <option value="0.5">0.5x (Slow-Mo)</option>
+          <option value="1.0" selected>1.0x (Normal)</option>
+          <option value="1.5">1.5x (Fast)</option>
+        </select>
+        <span style="font-size:11px; color:var(--text-dim); margin-left:8px;">💡 Orbit: Klik & Geser untuk memutar 3D &bull; Scroll untuk Zoom</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Global State
+    let scene, camera, renderer, controls;
+    let avatarModel = null;
+    let skeletonBones = {};
+    let restPoseRotations = {};
+    let drivenBoneNames = new Set();
+    let motionData = null;
+
+    let isPlaying = false;
+    let currentTimeMs = 0.0;
+    let totalDurationMs = 0.0;
+    let playbackSpeed = 1.0;
+    let lastClockTime = performance.now();
+    const torsoClipPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.64);
+    const motionQuaternionA = new THREE.Quaternion();
+    const motionQuaternionB = new THREE.Quaternion();
+    const motionQuaternionResult = new THREE.Quaternion();
+
+    const videoEl = document.getElementById('refVideo');
+    const timeDisplay = document.getElementById('timeDisplay');
+    const frameDisplay = document.getElementById('frameDisplay');
+    const progressSlider = document.getElementById('progressSlider');
+    const btnPlayPause = document.getElementById('btnPlayPause');
+    const loadingOverlay = document.getElementById('loadingOverlay');
+
+    // 1. Inisialisasi Three.js Scene
+    function initThree() {
+      const container = document.querySelector('.viewport-panel');
+      const canvas = document.getElementById('threeCanvas');
+
+      scene = new THREE.Scene();
+
+      // Camera
+      camera = new THREE.PerspectiveCamera(36, container.clientWidth / container.clientHeight, 0.1, 20);
+      setCameraPreset('upper');
+
+      // Renderer
+      renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, alpha: true });
+      renderer.setSize(container.clientWidth, container.clientHeight);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.outputEncoding = THREE.sRGBEncoding;
+      renderer.shadowMap.enabled = true;
+      renderer.localClippingEnabled = true;
+
+      // Controls
+      controls = new THREE.OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.05;
+      controls.enablePan = false;
+      controls.minDistance = 0.55;
+      controls.maxDistance = 2.4;
+      controls.minPolarAngle = Math.PI * 0.28;
+      controls.maxPolarAngle = Math.PI * 0.68;
+      controls.target.set(0, 1.25, 0);
+
+      // Lighting (Studio Setup)
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.85);
+      scene.add(ambientLight);
+
+      const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+      dirLight.position.set(3, 5, 4);
+      dirLight.castShadow = true;
+      scene.add(dirLight);
+
+      const rimLight = new THREE.DirectionalLight(0x818cf8, 0.8);
+      rimLight.position.set(-3, 3, -3);
+      scene.add(rimLight);
+
+      // Floor Grid
+      const grid = new THREE.GridHelper(10, 20, 0x6366f1, 0x1e293b);
+      grid.position.y = 0;
+      grid.visible = false;
+      scene.add(grid);
+
+      window.addEventListener('resize', onWindowResize);
+      animate();
+    }
+
+    function onWindowResize() {
+      const container = document.querySelector('.viewport-panel');
+      camera.aspect = container.clientWidth / container.clientHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(container.clientWidth, container.clientHeight);
+    }
+
+    // 2. Camera Presets
+    function setCameraPreset(mode) {
+      document.querySelectorAll('.btn-cam').forEach(b => b.classList.remove('active'));
+      const activeBtn = Array.from(document.querySelectorAll('.btn-cam')).find(b => b.getAttribute('onclick').includes(mode));
+      if (activeBtn) activeBtn.classList.add('active');
+
+      if (!camera) return;
+
+      if (mode === 'upper') {
+        // Cakup kepala, torso, dan tangan saat posisi netral di bawah.
+        camera.position.set(0, 1.29, 1.88);
+        if (controls) controls.target.set(0, 1.25, 0);
+      } else if (mode === 'rightHand') {
+        // Zoom dekat tangan kanan
+        camera.position.set(0.42, 1.34, 0.82);
+        if (controls) controls.target.set(0.28, 1.30, 0);
+      } else if (mode === 'leftHand') {
+        // Zoom dekat tangan kiri
+        camera.position.set(-0.42, 1.34, 0.82);
+        if (controls) controls.target.set(-0.28, 1.30, 0);
+      } else if (mode === 'torso') {
+        camera.position.set(0, 1.20, 2.05);
+        if (controls) controls.target.set(0, 1.17, 0);
+      }
+      if (controls) controls.update();
+    }
+
+    // Motion Library State
+    let availableMotions = [];
+    let currentMotionId = null;
+
+    async function loadManifestAndPopulate() {
+      try {
+        const resp = await fetch('motions_manifest.json', { cache: 'no-store' });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        availableMotions = await resp.json();
+        if (!Array.isArray(availableMotions) || availableMotions.length === 0) {
+          throw new Error('Manifest dataset manual kosong.');
+        }
+      } catch (err) {
+        console.error('Gagal memuat manifest dataset manual:', err);
+        throw err;
+      }
+
+      if (!availableMotions.some(m => m.id === currentMotionId)) {
+        currentMotionId = availableMotions[0].id;
+      }
+
+      const select = document.getElementById('motionSelect');
+      if (select) {
+        select.innerHTML = '';
+        availableMotions.forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m.id;
+          opt.textContent = `🤟 ${m.gloss} (${m.english}) - Lbl ${m.label}`;
+          if (m.id === currentMotionId) opt.selected = true;
+          select.appendChild(opt);
+        });
+      }
+    }
+
+    function updateMotionUI(motionMeta) {
+      const badgeGloss = document.getElementById('badgeGloss');
+      if (badgeGloss) badgeGloss.innerHTML = `<span>Manual: "${motionMeta.gloss}" (${motionMeta.english})</span>`;
+
+      const metaVid = document.getElementById('metaVideoFile');
+      if (metaVid) {
+        const sourceVideo = motionMeta.sourceVideo || motionMeta.video;
+        metaVid.innerText = sourceVideo.split(/[\\/]/).pop();
+      }
+
+      const metaGloss = document.getElementById('metaGloss');
+      if (metaGloss) metaGloss.innerText = `${motionMeta.gloss} (Label ${motionMeta.label})`;
+
+      const fpsBadge = document.getElementById('videoFpsBadge');
+      if (fpsBadge) fpsBadge.innerText = `${motionMeta.fps.toFixed(1)} FPS`;
+
+      if (videoEl) {
+        videoEl.pause();
+        videoEl.src = motionMeta.video;
+        videoEl.load();
+        videoEl.currentTime = 0;
+      }
+    }
+
+    async function switchMotion(signId) {
+      currentMotionId = signId;
+      const motionMeta = availableMotions.find(m => m.id === signId);
+      if (!motionMeta) return;
+
+      console.log(`[Switch] Beralih ke motion: ${motionMeta.gloss} (${motionMeta.english})`);
+
+      // 1. Update UI & video referensi manual
+      updateMotionUI(motionMeta);
+
+      // 3. Muat Data Animasi Motion JSON
+      try {
+        const resp = await fetch(motionMeta.motionFile, { cache: 'no-store' });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        motionData = await resp.json();
+        totalDurationMs = motionData.durationMs || (motionMeta.durationMs || 3000.0);
+        prepareMotionData();
+        document.getElementById('metaFrames').innerText = `${motionData.totalFrames} frames`;
+        document.getElementById('metaDuration').innerText = `${(totalDurationMs / 1000).toFixed(2)} detik`;
+        
+        // Reset waktu dan jalankan playback
+        currentTimeMs = 0.0;
+        progressSlider.value = 0;
+        applyMotionAtTime(0);
+
+        if (!isPlaying) {
+          togglePlay();
+        } else {
+          if (videoEl) videoEl.play().catch(e => console.log('Autoplay:', e));
+        }
+      } catch (err) {
+        console.error('Gagal memuat file motion JSON:', err);
+      }
+    }
+
+    // 3. Muat Avatar GLB & Motion JSON
+    async function loadAssets() {
+      const loader = new THREE.GLTFLoader();
+
+      await loadManifestAndPopulate();
+
+      // A. Load motion awal dari manifest dataset manual
+      try {
+        const initialMeta = availableMotions.find(m => m.id === currentMotionId) || availableMotions[0];
+        currentMotionId = initialMeta.id;
+        updateMotionUI(initialMeta);
+        const resp = await fetch(initialMeta.motionFile, { cache: 'no-store' });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        motionData = await resp.json();
+        totalDurationMs = motionData.durationMs || (initialMeta.durationMs || 2800.0);
+        prepareMotionData();
+        document.getElementById('metaFrames').innerText = `${motionData.totalFrames} frames`;
+        document.getElementById('metaDuration').innerText = `${(totalDurationMs / 1000).toFixed(2)} detik`;
+        console.log('[OK] Motion data awal berhasil dimuat:', motionData);
+      } catch (err) {
+        console.warn('Gagal memuat motion awal via fetch:', err);
+      }
+
+      // B. Load Avatar GLB
+      loader.load(
+        'man-rigged.glb',
+        (gltf) => {
+          avatarModel = gltf.scene;
+          avatarModel.position.set(0, 0, 0);
+          scene.add(avatarModel);
+
+          // Pindai semua tulang skeleton
+          skeletonBones = {};
+          restPoseRotations = {};
+
+          avatarModel.traverse((child) => {
+            if (child.isBone) {
+              skeletonBones[child.name] = child;
+              restPoseRotations[child.name] = child.quaternion.clone();
+            }
+            if (child.isMesh || child.isSkinnedMesh) {
+              child.frustumCulled = false;
+              child.castShadow = true;
+              child.receiveShadow = true;
+              const materials = Array.isArray(child.material) ? child.material : [child.material];
+              materials.filter(Boolean).forEach((material) => {
+                material.clippingPlanes = [torsoClipPlane];
+                material.clipShadows = true;
+                material.needsUpdate = true;
+              });
+            }
+          });
+
+          console.log(`[OK] Avatar dimuat! Ditemukan ${Object.keys(skeletonBones).length} tulang.`);
+          buildBoneMonitorUI();
+
+          loadingOverlay.style.opacity = '0';
+          setTimeout(() => {
+            loadingOverlay.style.display = 'none';
+            // Mulai putar otomatis gerakan awal
+            if (!isPlaying) togglePlay();
+          }, 300);
+        },
+        (xhr) => {
+          const pct = Math.round((xhr.loaded / xhr.total) * 100);
+          console.log(`Loading GLB: ${pct}%`);
+        },
+        (error) => {
+          console.error('Error loading GLB:', error);
+          loadingOverlay.innerHTML = `<div style="color:#fb7185; font-weight:700;">Gagal memuat man-rigged.glb!</div>
+          <div style="font-size:12px; color:var(--text-muted); margin-top:8px;">Pastikan web server lokal aktif (contoh: python run_viewer.py)</div>`;
+        }
+      );
+    }
+
+    function buildBoneMonitorUI() {
+      const monitor = document.getElementById('boneMonitor');
+      if (!monitor) return;
+      const targetBones = [
+        "RightArm", "RightForeArm", "RightHand",
+        "RightHandIndex1", "RightHandIndex2", "RightHandIndex3",
+        "RightHandThumb1", "RightHandThumb2", "RightHandThumb3",
+        "LeftArm", "LeftForeArm", "LeftHand",
+        "LeftHandIndex1", "LeftHandThumb1"
+      ];
+
+      let html = '';
+      targetBones.forEach(b => {
+        const found = skeletonBones[b] !== undefined;
+        html += `<span class="bone-chip ${found ? 'active' : ''}" id="chip_${b}">${found ? '✓' : '✗'} ${b}</span>`;
+      });
+      monitor.innerHTML = html;
+    }
+
+    function prepareMotionData() {
+      drivenBoneNames = new Set();
+      if (!motionData || !Array.isArray(motionData.frames)) return;
+
+      motionData.frames.forEach((frame, index) => {
+        // Motion hasil Studio punya timestamp eksplisit. Data lama tetap didukung
+        // dengan timestamp yang diturunkan dari FPS sumber.
+        if (!Number.isFinite(frame.timestampMs)) {
+          const fps = Number(motionData.sourceFps) || 30;
+          frame.timestampMs = (index / fps) * 1000;
+        }
+        Object.keys(frame.rotations || {}).forEach(name => drivenBoneNames.add(name));
+      });
+    }
+
+    function resetDrivenBonesToRest() {
+      Object.entries(skeletonBones).forEach(([name, bone]) => {
+        const restQ = restPoseRotations[name];
+        if (restQ) bone.quaternion.copy(restQ);
+      });
+    }
+
+    function findMotionFramePair(timeMs) {
+      const frames = motionData.frames;
+      if (frames.length === 1 || timeMs <= frames[0].timestampMs) {
+        return { previous: frames[0], next: frames[0], alpha: 0, index: 0 };
+      }
+
+      const lastIndex = frames.length - 1;
+      if (timeMs >= frames[lastIndex].timestampMs) {
+        return { previous: frames[lastIndex], next: frames[lastIndex], alpha: 0, index: lastIndex };
+      }
+
+      // Binary search menjaga scrub tetap ringan untuk motion yang panjang.
+      let low = 0;
+      let high = lastIndex;
+      while (low + 1 < high) {
+        const middle = (low + high) >> 1;
+        if (frames[middle].timestampMs <= timeMs) low = middle;
+        else high = middle;
+      }
+
+      const previous = frames[low];
+      const next = frames[high];
+      const span = Math.max(1, next.timestampMs - previous.timestampMs);
+      return {
+        previous,
+        next,
+        alpha: THREE.MathUtils.clamp((timeMs - previous.timestampMs) / span, 0, 1),
+        index: low
+      };
+    }
+
+    function readDeltaQuaternion(rotations, boneName, target) {
+      const values = rotations && rotations[boneName];
+      if (!Array.isArray(values) || values.length !== 4 || !values.every(Number.isFinite)) {
+        return target.identity();
+      }
+      return target.set(values[0], values[1], values[2], values[3]).normalize();
+    }
+
+    // 4. Update Pose Avatar berdasarkan Waktu
+    function applyMotionAtTime(timeMs) {
+      if (!motionData || !avatarModel || !motionData.frames || motionData.frames.length === 0) return;
+
+      const frames = motionData.frames;
+      const sample = findMotionFramePair(THREE.MathUtils.clamp(timeMs, 0, totalDurationMs));
+      const previousRotations = sample.previous.rotations || {};
+      const nextRotations = sample.next.rotations || {};
+
+      // Reset lebih dulu agar bone dari motion sebelumnya tidak tertinggal ketika
+      // berpindah ke motion lama yang hanya menggerakkan sebagian skeleton.
+      resetDrivenBonesToRest();
+
+      for (const boneName of drivenBoneNames) {
+        const bone = skeletonBones[boneName];
+        const restQ = restPoseRotations[boneName];
+        if (!bone || !restQ) continue;
+
+        readDeltaQuaternion(previousRotations, boneName, motionQuaternionA);
+        readDeltaQuaternion(nextRotations, boneName, motionQuaternionB);
+        motionQuaternionResult.copy(motionQuaternionA).slerp(motionQuaternionB, sample.alpha).normalize();
+        bone.quaternion.copy(restQ).multiply(motionQuaternionResult);
+      }
+
+      frameDisplay.innerText = `F: ${Math.min(sample.index + 1, frames.length)} / ${frames.length}`;
+    }
+
+    // 5. Animasi Loop & Sinkronisasi
+    function animate() {
+      requestAnimationFrame(animate);
+
+      const now = performance.now();
+      const deltaSec = (now - lastClockTime) / 1000.0;
+      lastClockTime = now;
+
+      if (isPlaying) {
+        currentTimeMs += deltaSec * 1000.0 * playbackSpeed;
+        if (currentTimeMs >= totalDurationMs) {
+          currentTimeMs = 0.0; // Loop playback
+          if (videoEl) videoEl.currentTime = 0;
+        }
+
+        applyMotionAtTime(currentTimeMs);
+
+        // Update UI
+        const curSec = (currentTimeMs / 1000.0).toFixed(2);
+        const totSec = (totalDurationMs / 1000.0).toFixed(2);
+        timeDisplay.innerText = `${curSec}s / ${totSec}s`;
+        progressSlider.value = (currentTimeMs / totalDurationMs) * 100;
+
+        // Sinkronisasi dengan video asli
+        if (videoEl && !videoEl.paused && Math.abs(videoEl.currentTime - (currentTimeMs / 1000.0)) > 0.15) {
+          videoEl.currentTime = currentTimeMs / 1000.0;
+        }
+      }
+
+      if (controls) controls.update();
+      renderer.render(scene, camera);
+    }
+
+    // 6. Kontrol Playback
+    function togglePlay() {
+      isPlaying = !isPlaying;
+      btnPlayPause.innerHTML = isPlaying ? '⏸ Jeda Gerakan' : '▶ Putar Gerakan';
+      btnPlayPause.classList.toggle('btn-primary', isPlaying);
+
+      if (videoEl) {
+        if (isPlaying) {
+          videoEl.play().catch(e => console.log('Autoplay policy:', e));
+        } else {
+          videoEl.pause();
+        }
+      }
+    }
+
+    function restartAnimation() {
+      currentTimeMs = 0.0;
+      if (videoEl) videoEl.currentTime = 0;
+      applyMotionAtTime(0);
+      if (!isPlaying) togglePlay();
+    }
+
+    function resetToRestPose() {
+      isPlaying = false;
+      btnPlayPause.innerHTML = '▶ Putar Gerakan';
+      btnPlayPause.classList.remove('btn-primary');
+      if (videoEl) {
+        videoEl.pause();
+        videoEl.currentTime = 0;
+      }
+      currentTimeMs = 0.0;
+
+      // Netral sama seperti Pose Studio: kedua lengan menggantung ke bawah.
+      for (const [name, bone] of Object.entries(skeletonBones)) {
+        if (restPoseRotations[name]) {
+          bone.quaternion.copy(restPoseRotations[name]);
+        }
+      }
+      const armAxis = new THREE.Vector3(0, 0, 1);
+      for (const [side, angle] of [['Right', -28], ['Left', 28]]) {
+        const arm = skeletonBones[`${side}Arm`];
+        if (arm) {
+          arm.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(
+            armAxis, THREE.MathUtils.degToRad(angle)
+          ));
+        }
+      }
+
+      timeDisplay.innerText = `0.00s / ${(totalDurationMs / 1000).toFixed(2)}s`;
+      progressSlider.value = 0;
+      frameDisplay.innerText = 'F: Netral';
+    }
+
+    function changeSpeed(val) {
+      playbackSpeed = parseFloat(val);
+      if (videoEl) videoEl.playbackRate = playbackSpeed;
+    }
+
+    // Scrubbing Timeline
+    progressSlider.addEventListener('input', (e) => {
+      const pct = parseFloat(e.target.value) / 100.0;
+      currentTimeMs = pct * totalDurationMs;
+      if (videoEl) videoEl.currentTime = currentTimeMs / 1000.0;
+      applyMotionAtTime(currentTimeMs);
+      const curSec = (currentTimeMs / 1000.0).toFixed(2);
+      timeDisplay.innerText = `${curSec}s / ${(totalDurationMs / 1000).toFixed(2)}s`;
+    });
+
+    // Inisialisasi saat load
+    window.addEventListener('DOMContentLoaded', () => {
+      initThree();
+      loadAssets();
+    });
+  </script>
+</body>
+</html>
