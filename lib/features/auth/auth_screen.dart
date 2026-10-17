@@ -7,8 +7,9 @@ import '../../core/config.dart';
 import '../../core/providers.dart';
 import '../../core/theme.dart';
 import '../../core/widgets.dart';
+import '../../services/email_verification.dart';
 
-enum AuthMode { login, register, forgot, reset }
+enum AuthMode { login, register, forgot, reset, verify }
 
 class AuthScreen extends ConsumerStatefulWidget {
   const AuthScreen({super.key, this.mode = AuthMode.login});
@@ -23,6 +24,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   final _name = TextEditingController();
   final _password = TextEditingController();
   final _confirmation = TextEditingController();
+  final _code = TextEditingController();
   bool _obscure = true;
   bool _loading = false;
   String? _error;
@@ -34,25 +36,69 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     _name.dispose();
     _password.dispose();
     _confirmation.dispose();
+    _code.dispose();
     super.dispose();
   }
 
   bool get _register => widget.mode == AuthMode.register;
   bool get _forgot => widget.mode == AuthMode.forgot;
   bool get _reset => widget.mode == AuthMode.reset;
+  bool get _verify => widget.mode == AuthMode.verify;
 
   String get _title => switch (widget.mode) {
     AuthMode.login => 'Selamat Datang',
     AuthMode.register => 'Daftar Akun',
     AuthMode.forgot => 'Lupa Kata Sandi',
     AuthMode.reset => 'Kata Sandi Baru',
+    AuthMode.verify => 'Verifikasi Email',
   };
   String get _action => switch (widget.mode) {
     AuthMode.login => 'Masuk',
     AuthMode.register => 'Daftar',
     AuthMode.forgot => 'Kirim Tautan Pemulihan',
     AuthMode.reset => 'Simpan Kata Sandi',
+    AuthMode.verify => 'Verifikasi',
   };
+
+  Future<void> _resendVerification() async {
+    final client = ref.read(supabaseProvider);
+    if (client == null) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+      _success = null;
+    });
+    try {
+      await EmailVerificationService(
+        client,
+      ).resendVerificationEmail(_email.text.trim());
+      if (mounted) {
+        setState(
+          () =>
+              _success = 'Email verifikasi telah dikirim ulang. Periksa kotak masuk.',
+        );
+      }
+    } on AuthException catch (error) {
+      if (mounted) {
+        setState(
+          () => _error = switch (error.code) {
+            'over_email_send_rate_limit' || 'over_request_rate_limit' =>
+              'Terlalu banyak percobaan. Coba beberapa saat lagi.',
+            _ => 'Belum bisa mengirim ulang. Periksa data dan coba lagi.',
+          },
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () =>
+              _error = 'Tidak dapat terhubung. Periksa koneksi lalu coba lagi.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
 
   Future<void> _submit() async {
     if (!_form.currentState!.validate()) return;
@@ -99,8 +145,29 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
             UserAttributes(password: _password.text),
           );
           ref.read(sessionProvider.notifier).finishRecovery();
+        case AuthMode.verify:
+          final result = await EmailVerificationService(
+            client,
+          ).verifyEmailOtp(_email.text.trim(), _code.text);
+          if (mounted) {
+            setState(() {
+              switch (result) {
+                case EmailVerificationResult.verified:
+                  _success = 'Email berhasil diverifikasi. Silakan masuk.';
+                case EmailVerificationResult.alreadyVerified:
+                  _success = 'Email sudah diverifikasi. Silakan masuk.';
+                case EmailVerificationResult.invalidCode:
+                  _error =
+                      'Kode verifikasi tidak valid atau sudah kedaluwarsa.';
+                case EmailVerificationResult.failure:
+                  _error =
+                      'Verifikasi belum berhasil. Periksa koneksi lalu coba lagi.';
+              }
+            });
+          }
       }
     } on AuthException catch (error) {
+      debugPrint('AuthException [${error.code}]: ${error.message}');
       if (mounted) {
         setState(
           () => _error = switch (error.code) {
@@ -109,11 +176,14 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
             'over_email_send_rate_limit' || 'over_request_rate_limit' =>
               'Terlalu banyak percobaan. Coba beberapa saat lagi.',
             'weak_password' => 'Gunakan kata sandi yang lebih kuat.',
-            _ => 'Permintaan belum berhasil. Periksa data dan coba lagi.',
+            _ => error.message.isNotEmpty
+                ? error.message
+                : 'Permintaan belum berhasil. Periksa data dan coba lagi.',
           },
         );
       }
-    } catch (_) {
+    } catch (e) {
+      debugPrint('General auth error: $e');
       if (mounted) {
         setState(
           () =>
@@ -310,7 +380,28 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                                     ),
                                     const SizedBox(height: 16),
                                   ],
-                                  if (!_forgot) ...[
+                                  if (_verify) ...[
+                                    _field(
+                                      'Kode verifikasi',
+                                      _code,
+                                      'Masukkan kode dari email',
+                                      'c2efd',
+                                    ),
+                                    Align(
+                                      alignment: Alignment.centerRight,
+                                      child: TextButton(
+                                        onPressed: _loading
+                                            ? null
+                                            : _resendVerification,
+                                        child: const Text(
+                                          'Kirim ulang kode',
+                                          style: TextStyle(fontSize: 12),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                  ],
+                                  if (!_forgot && !_verify) ...[
                                     _field(
                                       'Password',
                                       _password,
@@ -425,6 +516,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                               ? 'Sudah punya akun?'
                               : _forgot
                               ? 'Sudah ingat kata sandi?'
+                              : _verify
+                              ? 'Sudah punya akun?'
                               : 'Belum punya akun?',
                           style: const TextStyle(color: AppColors.muted),
                         ),
@@ -432,10 +525,12 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                           onPressed: _loading
                               ? null
                               : () => context.go(
-                                  _register || _forgot ? '/login' : '/register',
+                                  _register || _forgot || _verify
+                                      ? '/login'
+                                      : '/register',
                                 ),
                           child: Text(
-                            _register || _forgot ? 'Masuk' : 'Daftar',
+                            _register || _forgot || _verify ? 'Masuk' : 'Daftar',
                           ),
                         ),
                       ],

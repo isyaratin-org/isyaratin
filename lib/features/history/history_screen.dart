@@ -8,6 +8,7 @@ import '../../core/providers.dart';
 import '../../core/theme.dart';
 import '../../core/widgets.dart';
 import '../../data/models.dart';
+import '../../services/speech_service.dart';
 
 class HistoryScreen extends ConsumerStatefulWidget {
   const HistoryScreen({super.key});
@@ -34,12 +35,14 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
   @override
   Widget build(BuildContext context) {
     final session = ref.watch(sessionProvider);
-    final history = ref.watch(historyProvider);
+    final history = ref.watch(historyProvider(session.ownerId));
     return Column(
       children: [
         SectionHeader(
           'Riwayat',
-          subtitle: 'Semua percakapan yang pernah diterjemahkan',
+          subtitle: session.syncing
+              ? 'Menyinkronkan riwayat...'
+              : 'Semua percakapan yang pernah diterjemahkan',
           trailing: session.user == null
               ? null
               : IconButton(
@@ -57,8 +60,8 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
         Expanded(
           child: RefreshIndicator(
             onRefresh: () async {
-              ref.invalidate(historyProvider);
-              await ref.read(historyProvider.future);
+              ref.invalidate(historyProvider(session.ownerId));
+              await ref.read(historyProvider(session.ownerId).future);
             },
             child: ListView(
               padding: const EdgeInsets.all(20),
@@ -146,7 +149,8 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                     'Riwayat belum bisa dibaca',
                     'Coba muat kembali.',
                     action: OutlinedButton(
-                      onPressed: () => ref.invalidate(historyProvider),
+                      onPressed: () =>
+                          ref.invalidate(historyProvider(session.ownerId)),
                       child: const Text('Coba Lagi'),
                     ),
                   ),
@@ -260,8 +264,9 @@ class ConversationDetailScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final history = ref.watch(historyProvider);
-    final messages = ref.watch(messagesProvider(id));
+    final ownerId = ref.watch(sessionProvider.select((s) => s.ownerId));
+    final history = ref.watch(historyProvider(ownerId));
+    final messages = ref.watch(messagesProvider((ownerId, id)));
     final item = history.asData?.value.where((c) => c.id == id).firstOrNull;
     return Scaffold(
       appBar: AppBar(
@@ -390,11 +395,36 @@ class ConversationDetailScreen extends ConsumerWidget {
   }
 }
 
-class _MessageBubble extends StatelessWidget {
+class _MessageBubble extends StatefulWidget {
   const _MessageBubble(this.message);
   final ChatMessage message;
   @override
+  State<_MessageBubble> createState() => _MessageBubbleState();
+}
+
+class _MessageBubbleState extends State<_MessageBubble> {
+  final _speech = SpeechService();
+  bool _speaking = false;
+
+  @override
+  void dispose() {
+    _speech.dispose();
+    super.dispose();
+  }
+
+  Future<void> _toggleSpeech() async {
+    if (_speaking) {
+      await _speech.stop();
+      if (mounted) setState(() => _speaking = false);
+      return;
+    }
+    final started = await _speech.speak(widget.message.content);
+    if (mounted) setState(() => _speaking = started);
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final message = widget.message;
     final signer = message.author == MessageAuthor.signer;
     return LayoutBuilder(
       builder: (context, constraints) => Align(
@@ -439,9 +469,8 @@ class _MessageBubble extends StatelessWidget {
                   ),
                   const SizedBox(width: 16),
                   IconButton(
-                    tooltip: 'Pembacaan suara belum tersedia',
-                    onPressed: () =>
-                        showNotice(context, 'Pembacaan suara belum tersedia.'),
+                    tooltip: _speaking ? 'Hentikan pembacaan' : 'Bacakan pesan',
+                    onPressed: _toggleSpeech,
                     constraints: const BoxConstraints(
                       minWidth: 44,
                       minHeight: 44,

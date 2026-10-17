@@ -5,9 +5,39 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/providers.dart';
 import '../../core/theme.dart';
 import '../../core/widgets.dart';
+import '../../services/email_verification.dart';
 
 class ProfileScreen extends ConsumerWidget {
   const ProfileScreen({super.key});
+
+  Future<void> _resendVerification(BuildContext context, WidgetRef ref) async {
+    final client = ref.read(supabaseProvider);
+    final user = ref.read(sessionProvider).user;
+    if (client == null || user == null) {
+      showNotice(context, 'Masuk ke akun untuk memverifikasi email.');
+      return;
+    }
+    try {
+      await EmailVerificationService(
+        client,
+      ).resendVerificationEmail(user.email ?? '');
+      if (context.mounted) {
+        showNotice(context, 'Email verifikasi telah dikirim ulang.');
+      }
+    } on AuthException catch (error) {
+      if (context.mounted) {
+        showNotice(context, switch (error.code) {
+          'over_email_send_rate_limit' || 'over_request_rate_limit' =>
+            'Terlalu banyak percobaan. Coba beberapa saat lagi.',
+          _ => 'Belum bisa mengirim ulang. Coba lagi nanti.',
+        });
+      }
+    } catch (_) {
+      if (context.mounted) {
+        showNotice(context, 'Tidak dapat terhubung. Periksa koneksi.');
+      }
+    }
+  }
 
   Future<void> _editAccount(BuildContext context, WidgetRef ref) async {
     final client = ref.read(supabaseProvider);
@@ -107,6 +137,15 @@ class ProfileScreen extends ConsumerWidget {
                       'f3c08',
                       onTap: () => _editAccount(context, ref),
                     ),
+                    if (session.user?.emailConfirmedAt == null) ...[
+                      const Divider(height: 1, color: AppColors.border),
+                      _SettingsTile(
+                        'Verifikasi Email',
+                        'Kirim ulang email verifikasi.',
+                        'c2efd',
+                        onTap: () => _resendVerification(context, ref),
+                      ),
+                    ],
                     const Divider(height: 1, color: AppColors.border),
                     _SettingsTile(
                       'Ubah sandi',

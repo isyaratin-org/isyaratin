@@ -28,6 +28,8 @@
 	<true/>
 	<key>FlutterDeepLinkingEnabled</key>
 	<false/>
+	<key>NSCameraUsageDescription</key>
+	<string>Kamera digunakan untuk menangkap isyarat tangan dan menerjemahkannya ke teks.</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

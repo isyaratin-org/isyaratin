@@ -67,22 +67,15 @@ final sessionProvider = NotifierProvider<SessionController, AppSession>(
   SessionController.new,
 );
 
-final historyProvider = FutureProvider<List<Conversation>>((ref) {
-  final ownerId = ref.watch(
-    sessionProvider.select((session) => session.ownerId),
-  );
-  return ref.watch(databaseProvider).listConversations(ownerId);
-});
+final historyProvider = FutureProvider.family<List<Conversation>, String>(
+  (ref, ownerId) => ref.watch(databaseProvider).listConversations(ownerId),
+);
 
-final messagesProvider = FutureProvider.family<List<ChatMessage>, String>((
-  ref,
-  id,
-) {
-  final ownerId = ref.watch(
-    sessionProvider.select((session) => session.ownerId),
-  );
-  return ref.watch(databaseProvider).messages(ownerId, id);
-});
+final messagesProvider =
+    FutureProvider.family<List<ChatMessage>, (String, String)>((ref, args) {
+      final (ownerId, id) = args;
+      return ref.watch(databaseProvider).messages(ownerId, id);
+    });
 
 class SessionController extends Notifier<AppSession> {
   static const _uuid = Uuid();
@@ -111,9 +104,44 @@ class SessionController extends Notifier<AppSession> {
       if (event.event == AuthChangeEvent.passwordRecovery) {
         state = AppSession(user: user, recovering: true);
       }
+      // Auto-sync history whenever a session becomes available: on app start
+      // with a persisted session (initialSession) and right after sign-in.
+      if (user != null &&
+          (event.event == AuthChangeEvent.initialSession ||
+              event.event == AuthChangeEvent.signedIn)) {
+        _autoSync(user);
+      }
     });
+    final currentUser = client?.auth.currentUser;
+    if (currentUser != null) {
+      // Schedule after build so state assignment does not happen mid-build.
+      Future.microtask(() => _autoSync(currentUser));
+    }
     ref.onDispose(() => subscription?.cancel());
-    return AppSession(user: client?.auth.currentUser);
+    return AppSession(user: currentUser);
+  }
+
+  /// Best-effort background sync of history for [user]. Never throws; failures
+  /// are silent so the manual sync button on the history page remains the
+  /// explicit fallback.
+  Future<void> _autoSync(User user) async {
+    final client = ref.read(supabaseProvider);
+    if (client == null || state.syncing) return;
+    final ownerId = user.id;
+    state = AppSession(user: user, syncing: true);
+    try {
+      await SyncRepository(
+        ref.read(databaseProvider),
+        client,
+      ).synchronize(ownerId);
+      if (ref.mounted) refreshHistory(state.conversationId);
+    } catch (_) {
+      // Ignore — auto-sync is best-effort.
+    } finally {
+      if (ref.mounted && state.ownerId == ownerId) {
+        state = state.withSyncing(false);
+      }
+    }
   }
 
   void enterGuest() => state = const AppSession(guest: true);
@@ -194,8 +222,9 @@ class SessionController extends Notifier<AppSession> {
   }
 
   void refreshHistory([String? id]) {
-    ref.invalidate(historyProvider);
-    if (id != null) ref.invalidate(messagesProvider(id));
+    final ownerId = state.ownerId;
+    ref.invalidate(historyProvider(ownerId));
+    if (id != null) ref.invalidate(messagesProvider((ownerId, id)));
   }
 
   Future<void> editConversation(

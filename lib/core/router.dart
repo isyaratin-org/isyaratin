@@ -32,6 +32,7 @@ final routerProvider = Provider<GoRouter>((ref) {
         '/register',
         '/forgot-password',
         '/reset-password',
+        '/verify-email',
         '/auth/callback',
       ].contains(path);
       if (session.recovering) {
@@ -58,6 +59,10 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/reset-password',
         builder: (_, _) => const AuthScreen(mode: AuthMode.reset),
+      ),
+      GoRoute(
+        path: '/verify-email',
+        builder: (_, _) => const AuthScreen(mode: AuthMode.verify),
       ),
       GoRoute(
         path: '/auth/callback',

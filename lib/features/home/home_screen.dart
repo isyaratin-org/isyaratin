@@ -12,7 +12,7 @@ class HomeScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final session = ref.watch(sessionProvider);
-    final history = ref.watch(historyProvider);
+    final history = ref.watch(historyProvider(session.ownerId));
     return ListView(
       padding: EdgeInsets.zero,
       children: [

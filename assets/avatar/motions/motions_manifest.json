@@ -1,0 +1,68 @@
+[
+  {
+    "id": "rumah",
+    "gloss": "Rumah",
+    "english": "House",
+    "label": 23,
+    "video": "../datasets/WL-BISINDO/signer1_label23_sample1.mp4",
+    "motionFile": "motion_rumah.json",
+    "fps": 30.0,
+    "durationMs": 2800.0,
+    "totalFrames": 84
+  },
+  {
+    "id": "siang",
+    "gloss": "Siang",
+    "english": "Noon",
+    "label": 25,
+    "video": "../datasets/WL-BISINDO/signer1_label25_sample1.mp4",
+    "motionFile": "motion_siang.json",
+    "fps": 30.0,
+    "durationMs": 2300.0,
+    "totalFrames": 69
+  },
+  {
+    "id": "makan",
+    "gloss": "Makan",
+    "english": "Eat",
+    "label": 7,
+    "video": "../datasets/WL-BISINDO/signer0_label7_sample1.mp4",
+    "motionFile": "motion_makan.json",
+    "fps": 28.209,
+    "durationMs": 2233.33,
+    "totalFrames": 57
+  },
+  {
+    "id": "saya",
+    "gloss": "Saya",
+    "english": "I / Me",
+    "label": 9,
+    "video": "../datasets/WL-BISINDO/signer0_label9_sample1.mp4",
+    "motionFile": "motion_saya.json",
+    "fps": 25.765,
+    "durationMs": 2833.33,
+    "totalFrames": 59
+  },
+  {
+    "id": "malam",
+    "gloss": "Malam",
+    "english": "Night",
+    "label": 27,
+    "video": "../datasets/WL-BISINDO/signer1_label27_sample1.mp4",
+    "motionFile": "motion_malam.json",
+    "fps": 30.0,
+    "durationMs": 3200.0,
+    "totalFrames": 96
+  },
+  {
+    "id": "air",
+    "gloss": "Air",
+    "english": "Water",
+    "label": 0,
+    "video": "../datasets/WL-BISINDO/signer0_label0_sample1.mp4",
+    "motionFile": "motion_air.json",
+    "fps": 26.413,
+    "durationMs": 3066.67,
+    "totalFrames": 68
+  }
+]

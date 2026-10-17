@@ -38,13 +38,24 @@ void main() {
       expect(find.text('Halo, Teman!'), findsOneWidget);
       await tester.tap(find.text('Mulai Isyarat'));
       await tester.pumpAndSettle();
-      expect(find.text('Pengenalan isyarat belum tersedia'), findsOneWidget);
+      // Camera is unavailable in the test environment; the screen falls back
+      // to the typed-input flow with a status message.
+      expect(
+        find.text('Kamera tidak tersedia').evaluate().isNotEmpty ||
+            find.text('Menyiapkan kamera...').evaluate().isNotEmpty,
+        isTrue,
+      );
       await tester.enterText(
         find.byType(TextField),
         'Saya ingin mengurus KTP.',
       );
       await tester.pump();
-      await tester.ensureVisible(find.text('Tampilkan Pesan'));
+      await tester.scrollUntilVisible(
+        find.text('Tampilkan Pesan'),
+        120,
+        scrollable: find.byType(Scrollable).last,
+      );
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Tampilkan Pesan'));
       await pumpUntil(tester, find.text('Langkah 2 · Balas Pesan'));
       expect(find.text('Saya ingin mengurus KTP.'), findsOneWidget);
@@ -52,10 +63,26 @@ void main() {
       await tester.pump();
       await tester.ensureVisible(find.text('Kirim Balasan'));
       await tester.tap(find.text('Kirim Balasan'));
-      await pumpUntil(tester, find.text('Pratinjau avatar · gambar statis'));
-      expect(find.text('Pratinjau avatar · gambar statis'), findsOneWidget);
-      expect(find.text('Silakan siapkan berkas.'), findsOneWidget);
-      await tester.tap(find.text('Lanjutkan Percakapan'));
+      // The avatar screen renders its header immediately; avoid pumpAndSettle
+      // because the 3D webview is unavailable in tests and keeps a spinner.
+      for (
+        var i = 0;
+        i < 10 && find.text('Respon Avatar Isyarat').evaluate().isEmpty;
+        i++
+      ) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(find.text('Respon Avatar Isyarat'), findsOneWidget);
+      await tester.scrollUntilVisible(
+        find.text('Lanjutkan Percakapan Kamera'),
+        120,
+        scrollable: find.byType(Scrollable).first,
+      );
+      // Avoid pumpAndSettle: the 3D webview spinner never settles in tests.
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      await tester.tap(find.text('Lanjutkan Percakapan Kamera'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Riwayat'));
       await tester.pumpAndSettle();
@@ -71,7 +98,12 @@ void main() {
       expect(tester.takeException(), isNull);
       await tester.tap(find.text('Profil'));
       await tester.pumpAndSettle();
-      await tester.ensureVisible(find.text('Masuk atau Daftar'));
+      await tester.scrollUntilVisible(
+        find.text('Masuk atau Daftar'),
+        120,
+        scrollable: find.byType(Scrollable).last,
+      );
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Masuk atau Daftar'));
       await tester.pumpAndSettle();
       expect(find.text('Selamat Datang'), findsOneWidget);
@@ -128,6 +160,12 @@ Future<void> pumpUntil(WidgetTester tester, Finder target) async {
       () => Future<void>.delayed(const Duration(milliseconds: 10)),
     );
   }
-  expect(target, findsWidgets, reason: tester.widgetList<Text>(find.byType(Text))
-    .map((widget) => widget.data ?? '').join(' | '));
+  expect(
+    target,
+    findsWidgets,
+    reason: tester
+        .widgetList<Text>(find.byType(Text))
+        .map((widget) => widget.data ?? '')
+        .join(' | '),
+  );
 }
