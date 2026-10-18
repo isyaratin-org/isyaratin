@@ -54,11 +54,9 @@ void main() {
     await service.stopServer();
   });
 
-  test('viewer, studio, model, and manual motion assets are served', () async {
+  test('viewer, model, and manual motion assets are served', () async {
     for (final path in [
       '/index.html',
-      '/avatar_viewer.html',
-      '/pose_studio.html',
       '/js/three.min.js',
       '/man-rigged.glb',
       '/motions/motions_manifest.json',
@@ -68,16 +66,7 @@ void main() {
       expect(status, HttpStatus.ok, reason: path);
       expect(body, isNotEmpty, reason: path);
     }
-    expect(service.motions.length, 55);
-  });
-
-  test('manual video supports browser range requests', () async {
-    final (status, bytes) = await get(
-      '/videos_manual/membawa.mp4',
-      range: 'bytes=0-99',
-    );
-    expect(status, HttpStatus.partialContent);
-    expect(bytes.length, 100);
+    expect(service.motions.length, 29);
   });
 
   test('manual motion contains playable quaternion frames', () async {

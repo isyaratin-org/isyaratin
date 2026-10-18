@@ -1917,21 +1917,6 @@ class _AvatarScreenState extends ConsumerState<AvatarScreen> {
     }
   }
 
-  void _switchMotion(String motionId, String gloss) {
-    _sequenceGeneration++;
-    setState(() {
-      _automaticSequence = false;
-      _motionQueue = const [];
-      _unmatchedMotionWords = const [];
-      _motionQueueIndex = 0;
-      _selectedMotionId = motionId;
-      _activeGloss = gloss;
-      _detectedGestureName = null;
-      _isPlaying = true;
-    });
-    _controller?.runJavaScript('loadMotion(${jsonEncode(motionId)}, false)');
-  }
-
   void _startMotionPlayback() {
     if (!_avatarReady || _controller == null) return;
     _sequenceGeneration++;
@@ -2027,7 +2012,6 @@ class _AvatarScreenState extends ConsumerState<AvatarScreen> {
   @override
   Widget build(BuildContext context) {
     final reply = ref.watch(sessionProvider.select((s) => s.replyText));
-    final motions = AvatarMotionService.instance.motions;
 
     return Scaffold(
       appBar: AppBar(
@@ -2344,106 +2328,63 @@ class _AvatarScreenState extends ConsumerState<AvatarScreen> {
             ),
             const SizedBox(height: 14),
 
-            // Motion Switcher Selection
-            SurfaceCard(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Row(
-                    children: [
-                      Icon(
-                        Icons.swipe_outlined,
-                        size: 18,
-                        color: AppColors.primary,
-                      ),
-                      SizedBox(width: 8),
-                      Text(
-                        'Pustaka Gerakan Isyarat BISINDO',
-                        style: TextStyle(
-                          color: AppColors.primary,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 13,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: motions.map((m) {
-                      final isSelected = m.id == _selectedMotionId;
-                      return ChoiceChip(
-                        label: Text('${m.gloss} (${m.english})'),
-                        selected: isSelected,
-                        onSelected: (val) {
-                          if (val) _switchMotion(m.id, m.gloss);
-                        },
-                        selectedColor: const Color(0xFF0D9488),
-                        labelStyle: TextStyle(
-                          fontSize: 12,
-                          fontWeight: isSelected
-                              ? FontWeight.w700
-                              : FontWeight.w500,
-                          color: isSelected ? Colors.white : AppColors.text,
-                        ),
-                        avatar: isSelected
-                            ? const Icon(
-                                Icons.check,
-                                size: 14,
-                                color: Colors.white,
-                              )
-                            : null,
-                      );
-                    }).toList(),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 14),
-
             // Teks Balasan Card
             SurfaceCard(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: [
-                      const DesignIcon('a20f6', size: 18),
-                      const SizedBox(width: 8),
-                      const Expanded(
-                        child: Text(
-                          'Teks balasan',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: AppColors.primary,
-                            fontWeight: FontWeight.w600,
-                          ),
+                  SizedBox(
+                    width: double.infinity,
+                    child: Wrap(
+                      alignment: WrapAlignment.spaceBetween,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: 8,
+                      runSpacing: 6,
+                      children: [
+                        const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            DesignIcon('a20f6', size: 18),
+                            SizedBox(width: 8),
+                            Text(
+                              'Teks balasan',
+                              style: TextStyle(
+                                color: AppColors.primary,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
                         ),
-                      ),
-                      if (_detectedGestureName != null)
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 3,
-                          ),
-                          decoration: BoxDecoration(
-                            color: const Color(
-                              0xFF10B981,
-                            ).withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Text(
-                            'Sesuai: $_detectedGestureName',
-                            style: const TextStyle(
-                              color: Color(0xFF059669),
-                              fontSize: 11,
-                              fontWeight: FontWeight.w700,
+                        if (_detectedGestureName != null)
+                          Tooltip(
+                            message: 'Urutan: $_detectedGestureName',
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 3,
+                              ),
+                              decoration: BoxDecoration(
+                                color: const Color(
+                                  0xFF10B981,
+                                ).withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Text(
+                                _motionQueue.length > 1
+                                    ? '${_motionQueue.length} Gerakan Sesuai'
+                                    : 'Sesuai: $_detectedGestureName',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Color(0xFF059669),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
                             ),
                           ),
-                        ),
-                    ],
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 10),
                   Text(
