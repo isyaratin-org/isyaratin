@@ -129,75 +129,28 @@ class AppShell extends StatelessWidget {
     bottomNavigationBar: DecoratedBox(
       decoration: const BoxDecoration(
         color: Colors.white,
-        border: Border(top: BorderSide(color: Color(0xFFD9E3E7))),
+        border: Border(top: BorderSide(color: Color(0xFFE2E8F0))),
+        boxShadow: [
+          BoxShadow(
+            color: Color(0x06000000),
+            blurRadius: 8,
+            offset: Offset(0, -2),
+          ),
+        ],
       ),
       child: SafeArea(
         top: false,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 18),
+          padding: const EdgeInsets.symmetric(horizontal: 14),
           child: SizedBox(
             height: 66 + (MediaQuery.textScalerOf(context).scale(11) - 11) * 4,
             child: Row(
               children: [
                 for (final item in _items)
-                  Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 2),
-                      child: Semantics(
-                        selected: path == item.path,
-                        button: true,
-                        label: item.label,
-                        child: Tooltip(
-                          message: item.label,
-                          child: Material(
-                            color: path == item.path
-                                ? AppColors.primary
-                                : Colors.white,
-                            borderRadius: BorderRadius.circular(12),
-                            child: InkWell(
-                              borderRadius: BorderRadius.circular(12),
-                              onTap: () => context.go(item.path),
-                              child: Center(
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 8,
-                                  ),
-                                  child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      DesignIcon(
-                                        item.asset,
-                                        size: 22,
-                                        color: path == item.path
-                                            ? Colors.white
-                                            : AppColors.text,
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        item.label,
-                                        textAlign: TextAlign.center,
-                                        maxLines: 2,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          height: 1.2,
-                                          fontWeight: path == item.path
-                                              ? FontWeight.w700
-                                              : FontWeight.w500,
-                                          color: path == item.path
-                                              ? Colors.white
-                                              : AppColors.text,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
+                  _NavItem(
+                    item: item,
+                    isSelected: path == item.path,
+                    onTap: () => context.go(item.path),
                   ),
               ],
             ),
@@ -206,4 +159,87 @@ class AppShell extends StatelessWidget {
       ),
     ),
   );
+}
+
+class _NavItem extends StatelessWidget {
+  const _NavItem({
+    required this.item,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  final ({String asset, String label, String path}) item;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 1),
+        child: Semantics(
+          selected: isSelected,
+          button: true,
+          label: item.label,
+          child: Tooltip(
+            message: item.label,
+            child: Material(
+              color: Colors.transparent,
+              borderRadius: BorderRadius.circular(12),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: onTap,
+                child: Center(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: isSelected
+                                ? AppColors.primary.withValues(alpha: 0.12)
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: DesignIcon(
+                            item.asset,
+                            size: 20,
+                            color: isSelected
+                                ? AppColors.primary
+                                : const Color(0xFF64748B),
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          item.label,
+                          textAlign: TextAlign.center,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 11,
+                            height: 1.2,
+                            fontWeight: isSelected
+                                ? FontWeight.w700
+                                : FontWeight.w500,
+                            color: isSelected
+                                ? AppColors.primary
+                                : const Color(0xFF64748B),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

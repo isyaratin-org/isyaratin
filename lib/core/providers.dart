@@ -79,6 +79,7 @@ final messagesProvider =
 
 class SessionController extends Notifier<AppSession> {
   static const _uuid = Uuid();
+  bool _syncRequested = false;
 
   @override
   AppSession build() {
@@ -126,15 +127,25 @@ class SessionController extends Notifier<AppSession> {
   /// explicit fallback.
   Future<void> _autoSync(User user) async {
     final client = ref.read(supabaseProvider);
-    if (client == null || state.syncing) return;
+    if (client == null) return;
+    if (state.syncing) {
+      _syncRequested = true;
+      return;
+    }
     final ownerId = user.id;
-    state = AppSession(user: user, syncing: true);
+    if (state.ownerId != ownerId) return;
+    state = state.withSyncing(true);
     try {
-      await SyncRepository(
-        ref.read(databaseProvider),
-        client,
-      ).synchronize(ownerId);
-      if (ref.mounted) refreshHistory(state.conversationId);
+      do {
+        _syncRequested = false;
+        await SyncRepository(
+          ref.read(databaseProvider),
+          client,
+        ).synchronize(ownerId);
+      } while (_syncRequested && ref.mounted && state.ownerId == ownerId);
+      if (ref.mounted && state.ownerId == ownerId) {
+        refreshHistory(state.conversationId);
+      }
     } catch (_) {
       // Ignore — auto-sync is best-effort.
     } finally {
@@ -178,7 +189,11 @@ class SessionController extends Notifier<AppSession> {
     state = state.withConversation(id, signer, reply);
   }
 
-  Future<void> send(String value, MessageAuthor author) async {
+  Future<void> send(
+    String value,
+    MessageAuthor author, {
+    MessageSource source = MessageSource.typed,
+  }) async {
     final content = value.trim();
     if (content.isEmpty || content.length > 5000) {
       throw ArgumentError('Isi pesan harus 1–5000 karakter.');
@@ -207,7 +222,7 @@ class SessionController extends Notifier<AppSession> {
         conversationId: id,
         ownerId: ownerId,
         author: author,
-        source: MessageSource.typed,
+        source: source,
         content: content,
         createdAt: now,
       ),
@@ -219,6 +234,8 @@ class SessionController extends Notifier<AppSession> {
       author == MessageAuthor.partner ? content : state.replyText,
     );
     refreshHistory(id);
+    final user = state.user;
+    if (user != null) unawaited(_autoSync(user));
   }
 
   void refreshHistory([String? id]) {
@@ -242,6 +259,52 @@ class SessionController extends Notifier<AppSession> {
         .read(databaseProvider)
         .editConversation(state.ownerId, id, trimmedTitle, location.trim());
     refreshHistory(id);
+    final user = state.user;
+    if (user != null) unawaited(_autoSync(user));
+  }
+
+  Future<void> deleteConversation(String id) async {
+    final ownerId = state.ownerId;
+    await ref.read(databaseProvider).deleteConversation(ownerId, id);
+    if (state.conversationId == id) {
+      state = state.withConversation(null, null, null);
+    }
+    refreshHistory(id);
+    final user = state.user;
+    final client = ref.read(supabaseProvider);
+    if (user != null && client != null) {
+      try {
+        await client
+            .from('messages')
+            .delete()
+            .eq('conversation_id', id)
+            .eq('owner_id', ownerId);
+        await client
+            .from('conversations')
+            .delete()
+            .eq('id', id)
+            .eq('owner_id', ownerId);
+      } catch (_) {
+        // Best-effort remote deletion
+      }
+    }
+  }
+
+  Future<void> clearHistory() async {
+    final ownerId = state.ownerId;
+    await ref.read(databaseProvider).clearHistory(ownerId);
+    state = state.withConversation(null, null, null);
+    refreshHistory();
+    final user = state.user;
+    final client = ref.read(supabaseProvider);
+    if (user != null && client != null) {
+      try {
+        await client.from('messages').delete().eq('owner_id', ownerId);
+        await client.from('conversations').delete().eq('owner_id', ownerId);
+      } catch (_) {
+        // Best-effort remote deletion
+      }
+    }
   }
 
   Future<int> sync() async {

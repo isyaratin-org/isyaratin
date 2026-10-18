@@ -32,10 +32,95 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
     }
   }
 
+  Future<bool> _confirmDeleteConversationDialog(
+    BuildContext context,
+    Conversation conversation,
+  ) async {
+    return await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+            ),
+            title: const Text(
+              'Hapus Percakapan?',
+              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18),
+            ),
+            content: Text(
+              'Percakapan "${conversation.title}" dan seluruh pesannya akan dihapus secara permanen.',
+              style: const TextStyle(color: AppColors.muted, fontSize: 14),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text(
+                  'Batal',
+                  style: TextStyle(color: AppColors.muted),
+                ),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.error,
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text('Hapus'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+  }
+
+  Future<void> _clearAll(BuildContext context) async {
+    final confirmed =
+        await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+            ),
+            title: const Text(
+              'Hapus Semua Riwayat?',
+              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18),
+            ),
+            content: const Text(
+              'Semua riwayat percakapan akan dihapus secara permanen. Tindakan ini tidak dapat dibatalkan.',
+              style: TextStyle(color: AppColors.muted, fontSize: 14),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text(
+                  'Batal',
+                  style: TextStyle(color: AppColors.muted),
+                ),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.error,
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text('Hapus Semua'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (confirmed) {
+      await ref.read(sessionProvider.notifier).clearHistory();
+      if (context.mounted) {
+        showNotice(context, 'Semua riwayat percakapan berhasil dihapus.');
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final session = ref.watch(sessionProvider);
     final history = ref.watch(historyProvider(session.ownerId));
+    final hasHistory = history.asData?.value.isNotEmpty ?? false;
     return Column(
       children: [
         SectionHeader(
@@ -43,23 +128,46 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
           subtitle: session.syncing
               ? 'Menyinkronkan riwayat...'
               : 'Semua percakapan yang pernah diterjemahkan',
-          trailing: session.user == null
-              ? null
-              : IconButton(
-                  tooltip: 'Sinkronkan riwayat',
-                  onPressed: session.syncing ? null : _sync,
-                  icon: session.syncing
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.sync),
-                ),
+          trailing: (session.user != null || hasHistory)
+              ? Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (session.user != null)
+                      IconButton(
+                        tooltip: 'Sinkronkan riwayat',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: session.syncing ? null : _sync,
+                        icon: session.syncing
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.sync, size: 20),
+                      ),
+                    if (hasHistory)
+                      IconButton(
+                        tooltip: 'Hapus semua riwayat',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () => _clearAll(context),
+                        icon: const Icon(
+                          Icons.delete_sweep_outlined,
+                          size: 22,
+                          color: AppColors.muted,
+                        ),
+                      ),
+                  ],
+                )
+              : null,
         ),
         Expanded(
           child: RefreshIndicator(
             onRefresh: () async {
+              if (session.user != null) {
+                await _sync();
+              }
               ref.invalidate(historyProvider(session.ownerId));
               await ref.read(historyProvider(session.ownerId).future);
             },
@@ -139,7 +247,64 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                             for (final conversation in group.items)
                               Padding(
                                 padding: const EdgeInsets.only(bottom: 12),
-                                child: ConversationTile(conversation),
+                                child: Dismissible(
+                                  key: Key('conv_${conversation.id}'),
+                                  direction: DismissDirection.endToStart,
+                                  confirmDismiss: (_) =>
+                                      _confirmDeleteConversationDialog(
+                                        context,
+                                        conversation,
+                                      ),
+                                  onDismissed: (_) async {
+                                    await ref
+                                        .read(sessionProvider.notifier)
+                                        .deleteConversation(conversation.id);
+                                    if (context.mounted) {
+                                      showNotice(
+                                        context,
+                                        'Percakapan berhasil dihapus.',
+                                      );
+                                    }
+                                  },
+                                  background: Container(
+                                    alignment: Alignment.centerRight,
+                                    padding: const EdgeInsets.only(right: 20),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.error.withValues(
+                                        alpha: 0.12,
+                                      ),
+                                      borderRadius: BorderRadius.circular(18),
+                                    ),
+                                    child: const Icon(
+                                      Icons.delete_outline,
+                                      color: AppColors.error,
+                                      size: 24,
+                                    ),
+                                  ),
+                                  child: ConversationTile(
+                                    conversation,
+                                    onDelete: () async {
+                                      final confirmed =
+                                          await _confirmDeleteConversationDialog(
+                                            context,
+                                            conversation,
+                                          );
+                                      if (confirmed) {
+                                        await ref
+                                            .read(sessionProvider.notifier)
+                                            .deleteConversation(
+                                              conversation.id,
+                                            );
+                                        if (context.mounted) {
+                                          showNotice(
+                                            context,
+                                            'Percakapan berhasil dihapus.',
+                                          );
+                                        }
+                                      }
+                                    },
+                                  ),
+                                ),
                               ),
                           ],
                       ],
@@ -167,68 +332,134 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
 }
 
 class ConversationTile extends StatelessWidget {
-  const ConversationTile(this.conversation, {super.key, this.dark = false});
+  const ConversationTile(
+    this.conversation, {
+    super.key,
+    this.dark = false,
+    this.onDelete,
+  });
   final Conversation conversation;
   final bool dark;
+  final VoidCallback? onDelete;
+
   @override
-  Widget build(BuildContext context) => Material(
-    color: dark ? AppColors.primary : Colors.white,
-    borderRadius: BorderRadius.circular(20),
-    child: InkWell(
-      borderRadius: BorderRadius.circular(20),
-      onTap: () => context.push('/history/${conversation.id}'),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: AppColors.pale,
-                borderRadius: BorderRadius.circular(18),
+  Widget build(BuildContext context) => Container(
+    decoration: BoxDecoration(
+      color: dark ? AppColors.primary : Colors.white,
+      borderRadius: BorderRadius.circular(18),
+      border: dark ? null : Border.all(color: const Color(0xFFE2EBF0)),
+      boxShadow: [
+        BoxShadow(
+          color: dark
+              ? AppColors.primary.withValues(alpha: 0.2)
+              : const Color(0x06000000),
+          blurRadius: 8,
+          offset: const Offset(0, 3),
+        ),
+      ],
+    ),
+    child: Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: () => context.push('/history/${conversation.id}'),
+        onLongPress: onDelete,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: AppColors.pale,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const DesignIcon('26c8a'),
               ),
-              child: const DesignIcon('26c8a'),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    conversation.title,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: dark ? Colors.white : AppColors.text,
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      conversation.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: dark ? Colors.white : AppColors.text,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 3),
-                  Row(
-                    children: [
-                      DesignIcon(dark ? 'd58da' : '75a3c', size: 12),
-                      const SizedBox(width: 4),
-                      Expanded(
-                        child: Text(
-                          '${DateFormat('dd MMM, HH.mm', 'id_ID').format(conversation.updatedAt.toLocal())} · ${conversation.location.isEmpty ? 'Lokasi belum diisi' : conversation.location}',
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: dark ? Colors.white : AppColors.muted,
+                    const SizedBox(height: 3),
+                    Row(
+                      children: [
+                        DesignIcon(dark ? 'd58da' : '75a3c', size: 12),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            '${DateFormat('dd MMM, HH.mm', 'id_ID').format(conversation.updatedAt.toLocal())} · ${conversation.location.isEmpty ? 'Lokasi belum diisi' : conversation.location}',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: dark ? Colors.white : AppColors.muted,
+                            ),
                           ),
                         ),
-                      ),
-                    ],
-                  ),
-                ],
+                      ],
+                    ),
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(width: 8),
-            DesignIcon(dark ? 'f05bc' : 'f900d', size: 18),
-          ],
+              const SizedBox(width: 4),
+              if (onDelete != null)
+                PopupMenuButton<String>(
+                  tooltip: 'Pilihan',
+                  icon: Icon(
+                    Icons.more_vert,
+                    size: 18,
+                    color: dark ? Colors.white70 : AppColors.muted,
+                  ),
+                  padding: EdgeInsets.zero,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  onSelected: (val) {
+                    if (val == 'delete') {
+                      onDelete?.call();
+                    }
+                  },
+                  itemBuilder: (context) => [
+                    const PopupMenuItem(
+                      value: 'delete',
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.delete_outline,
+                            size: 18,
+                            color: AppColors.error,
+                          ),
+                          SizedBox(width: 8),
+                          Text(
+                            'Hapus',
+                            style: TextStyle(
+                              color: AppColors.error,
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                )
+              else
+                DesignIcon(dark ? 'f05bc' : 'f900d', size: 18),
+            ],
+          ),
         ),
       ),
     ),
@@ -258,6 +489,59 @@ class ConversationDetailScreen extends ConsumerWidget {
     } catch (_) {
       if (context.mounted) {
         showNotice(context, 'Informasi belum tersimpan. Coba lagi.');
+      }
+    }
+  }
+
+  Future<void> _delete(
+    BuildContext context,
+    WidgetRef ref,
+    Conversation item,
+  ) async {
+    final confirmed =
+        await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+            ),
+            title: const Text(
+              'Hapus Percakapan?',
+              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18),
+            ),
+            content: Text(
+              'Percakapan "${item.title}" dan seluruh pesan di dalamnya akan dihapus secara permanen.',
+              style: const TextStyle(color: AppColors.muted, fontSize: 14),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text(
+                  'Batal',
+                  style: TextStyle(color: AppColors.muted),
+                ),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.error,
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text('Hapus'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (confirmed) {
+      await ref.read(sessionProvider.notifier).deleteConversation(id);
+      if (context.mounted) {
+        if (context.canPop()) {
+          context.pop();
+        } else {
+          context.go('/history');
+        }
+        showNotice(context, 'Percakapan berhasil dihapus.');
       }
     }
   }
@@ -295,12 +579,22 @@ class ConversationDetailScreen extends ConsumerWidget {
           ],
         ),
         actions: [
-          if (item != null)
+          if (item != null) ...[
             IconButton(
               tooltip: 'Edit info percakapan',
               onPressed: () => _edit(context, ref, item),
               icon: const DesignIcon('01bcf', size: 17),
             ),
+            IconButton(
+              tooltip: 'Hapus percakapan',
+              onPressed: () => _delete(context, ref, item),
+              icon: const Icon(
+                Icons.delete_outline,
+                size: 20,
+                color: AppColors.error,
+              ),
+            ),
+          ],
           const SizedBox(width: 8),
         ],
       ),
@@ -467,7 +761,20 @@ class _MessageBubbleState extends State<_MessageBubble> {
                       color: signer ? const Color(0xFFD9ECEC) : AppColors.muted,
                     ),
                   ),
-                  const SizedBox(width: 16),
+                  const SizedBox(width: 8),
+                  Text(
+                    switch (message.source) {
+                      MessageSource.sign => 'Isyarat',
+                      MessageSource.voice => 'Voice',
+                      MessageSource.typed => 'Teks',
+                    },
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      color: signer ? const Color(0xFFD9ECEC) : AppColors.muted,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
                   IconButton(
                     tooltip: _speaking ? 'Hentikan pembacaan' : 'Bacakan pesan',
                     onPressed: _toggleSpeech,

@@ -55,6 +55,7 @@ class SyncRepository {
               .select()
               .eq('owner_id', ownerId)
               .eq('conversation_id', conversation.id)
+              .order('created_at')
               .order('id')
               .range(messageOffset, messageOffset + pageSize - 1);
           messages.addAll(batch.map(ChatMessage.fromJson));

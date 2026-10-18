@@ -18,7 +18,7 @@ class HomeScreen extends ConsumerWidget {
       children: [
         BrandBackground(
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 20, 20, 60),
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 36),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -42,7 +42,7 @@ class HomeScreen extends ConsumerWidget {
                     ),
                   ],
                 ),
-                const SizedBox(height: 34),
+                const SizedBox(height: 22),
                 SurfaceCard(
                   color: const Color(0xFFEEF8F8),
                   padding: const EdgeInsets.symmetric(
@@ -70,7 +70,7 @@ class HomeScreen extends ConsumerWidget {
                     ),
                   ),
                 ),
-                const SizedBox(height: 48),
+                const SizedBox(height: 24),
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [

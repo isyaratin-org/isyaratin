@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
@@ -21,13 +22,18 @@ class CameraScreen extends ConsumerStatefulWidget {
   ConsumerState<CameraScreen> createState() => _CameraScreenState();
 }
 
-class _CameraScreenState extends ConsumerState<CameraScreen> {
+class _CameraScreenState extends ConsumerState<CameraScreen>
+    with WidgetsBindingObserver {
   final _text = TextEditingController();
   bool _saving = false;
   CameraController? _controller;
   List<CameraDescription> _cameras = const [];
   int _selectedCameraIndex = 0;
   bool _cameraUnavailable = false;
+  String? _cameraError;
+  bool _initializingCamera = false;
+  bool _cameraLifecycleActive = true;
+  Future<void>? _cameraDisposal;
   bool _switchingCamera = false;
   SignRecognitionModel? _model;
   SignRecognitionPipeline? _pipeline;
@@ -41,8 +47,29 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initCamera();
     _initModel();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused) {
+      _cameraLifecycleActive = false;
+      final controller = _controller;
+      _controller = null;
+      _predictionSub?.cancel();
+      _predictionSub = null;
+      _pipeline?.dispose();
+      _pipeline = null;
+      // inactive sering langsung diikuti paused; jangan hilangkan Future
+      // dispose pertama sebelum kamera dibuka lagi saat resumed.
+      if (controller != null) _cameraDisposal = controller.dispose();
+    } else if (state == AppLifecycleState.resumed && _controller == null) {
+      _cameraLifecycleActive = true;
+      if (!_initializingCamera) _initCamera();
+    }
   }
 
   Future<void> _initModel() async {
@@ -87,14 +114,33 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
       debugPrint('SignRecognitionPipeline stream running.');
     } catch (e, stack) {
       debugPrint('Pipeline start error: $e\n$stack');
+      await _predictionSub?.cancel();
+      _predictionSub = null;
+      _pipeline?.dispose();
+      _pipeline = null;
+      if (mounted) setState(() {});
     }
   }
 
   Future<void> _initCamera() async {
+    if (_initializingCamera) return;
+    _initializingCamera = true;
+    if (mounted) {
+      setState(() {
+        _cameraUnavailable = false;
+        _cameraError = null;
+      });
+    }
     try {
+      await _cameraDisposal;
+      if (!mounted || !_cameraLifecycleActive) return;
       final cameras = await availableCameras();
-      if (cameras.isEmpty || !mounted) {
-        setState(() => _cameraUnavailable = true);
+      if (!mounted || !_cameraLifecycleActive) return;
+      if (cameras.isEmpty) {
+        setState(() {
+          _cameraUnavailable = true;
+          _cameraError = 'Tidak ada kamera yang terdeteksi.';
+        });
         return;
       }
       _cameras = cameras;
@@ -108,7 +154,22 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
       await _setupCameraController(_cameras[_selectedCameraIndex]);
     } catch (e, stack) {
       debugPrint('Camera init error: $e\n$stack');
-      if (mounted) setState(() => _cameraUnavailable = true);
+      if (mounted) {
+        setState(() {
+          _cameraUnavailable = true;
+          _cameraError = e is CameraException
+              ? '${e.code}: ${e.description ?? "Periksa izin kamera di pengaturan perangkat."}'
+              : 'Kamera gagal dibuka. Periksa izin kamera lalu coba lagi.';
+        });
+      }
+    } finally {
+      _initializingCamera = false;
+      if (mounted &&
+          _cameraLifecycleActive &&
+          _controller == null &&
+          !_cameraUnavailable) {
+        _initCamera();
+      }
     }
   }
 
@@ -120,14 +181,22 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
       ResolutionPreset.low,
       enableAudio: false,
     );
-    await controller.initialize();
-    if (!mounted) {
+    try {
+      await controller.initialize();
+    } catch (_) {
+      await controller.dispose();
+      rethrow;
+    }
+    if (!mounted || !_cameraLifecycleActive) {
       await controller.dispose();
       return;
     }
     setState(() {
       _controller = controller;
       _switchingCamera = false;
+      _cameraUnavailable = false;
+      _cameraError = null;
+      _isCameraPaused = false;
     });
     if (_model != null) {
       _startPipeline();
@@ -175,7 +244,11 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
     } catch (e, stack) {
       debugPrint('Error switching camera: $e\n$stack');
       if (mounted) {
-        setState(() => _switchingCamera = false);
+        setState(() {
+          _switchingCamera = false;
+          _cameraUnavailable = true;
+          _cameraError = 'Gagal mengganti kamera. Coba lagi.';
+        });
         showNotice(context, 'Gagal mengganti kamera. Coba lagi.');
       }
     }
@@ -183,6 +256,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _predictionSub?.cancel();
     _pipeline?.dispose();
     _livePrediction.dispose();
@@ -196,7 +270,13 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
     try {
       await ref
           .read(sessionProvider.notifier)
-          .send(_text.text, MessageAuthor.signer);
+          .send(
+            _text.text,
+            MessageAuthor.signer,
+            source: _lastResult?.sentence.isNotEmpty == true
+                ? MessageSource.sign
+                : MessageSource.typed,
+          );
       if (mounted) {
         _text.clear();
         context.go('/reply');
@@ -248,10 +328,18 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
       if (_isCameraPaused) {
         await controller.resumePreview();
         if (mounted) setState(() => _isCameraPaused = false);
+        if (_model != null) await _startPipeline();
         if (mounted) showNotice(context, 'Pratinjau kamera dilanjutkan.');
       } else {
         if (_isRecording) {
           _cancelRecording();
+        }
+        await _predictionSub?.cancel();
+        _predictionSub = null;
+        _pipeline?.dispose();
+        _pipeline = null;
+        if (controller.value.isStreamingImages) {
+          await controller.stopImageStream();
         }
         await controller.pausePreview();
         if (mounted) setState(() => _isCameraPaused = true);
@@ -566,6 +654,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
             const SizedBox(height: 16),
             // Recording Controls Card
             SurfaceCard(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -614,12 +703,6 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
                           child: const Text('Batal'),
                         ),
                       ],
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'Peragakan gerakan isyarat. Tekan Berhenti & Terjemahkan saat selesai.',
-                      style: TextStyle(fontSize: 12, color: AppColors.muted),
-                      textAlign: TextAlign.center,
                     ),
                   ] else if (_isAnalyzing) ...[
                     const Padding(
@@ -675,12 +758,6 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
                           borderRadius: BorderRadius.circular(14),
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'Rekam gerakan total di depan kamera, lalu tekan Berhenti untuk menganalisis perkata.',
-                      style: TextStyle(fontSize: 12, color: AppColors.muted),
-                      textAlign: TextAlign.center,
                     ),
                   ],
                 ],
@@ -941,13 +1018,18 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
   }) {
     return Material(
       color: Colors.black.withValues(alpha: 0.55),
-      shape: const CircleBorder(),
+      shape: CircleBorder(
+        side: BorderSide(
+          color: Colors.white.withValues(alpha: 0.18),
+          width: 1,
+        ),
+      ),
       clipBehavior: Clip.antiAlias,
       child: IconButton(
         tooltip: tooltip,
-        iconSize: 20,
-        constraints: const BoxConstraints(minWidth: 38, minHeight: 38),
-        padding: const EdgeInsets.all(8),
+        iconSize: 19,
+        constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+        padding: const EdgeInsets.all(7),
         color: Colors.white,
         disabledColor: Colors.white30,
         onPressed: onPressed,
@@ -1057,14 +1139,32 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
           style: Theme.of(context).textTheme.titleMedium,
         ),
         const SizedBox(height: 8),
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 24),
-          child: Text(
-            'Kamu bisa memulai percakapan dengan mengetik pesan di bawah.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: AppColors.muted, fontSize: 13),
+        if (_cameraError != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Text(
+              _cameraError!,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: AppColors.muted, fontSize: 12),
+            ),
+          )
+        else
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 24),
+            child: Text(
+              'Kamu bisa memulai percakapan dengan mengetik pesan di bawah.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppColors.muted, fontSize: 13),
+            ),
           ),
-        ),
+        if (_cameraUnavailable) ...[
+          const SizedBox(height: 12),
+          TextButton.icon(
+            onPressed: _initCamera,
+            icon: const Icon(Icons.refresh),
+            label: const Text('Coba lagi'),
+          ),
+        ],
       ],
     );
   }
@@ -1169,6 +1269,25 @@ class _ReplyScreenState extends ConsumerState<ReplyScreen> {
   bool _saving = false;
   bool _speaking = false;
   bool _listening = false;
+  bool _voiceInputUsed = false;
+  AvatarMotionSequence? _motionPreview;
+
+  @override
+  void initState() {
+    super.initState();
+    AvatarMotionService.instance.loadManifest().then((_) {
+      if (mounted) _refreshMotionPreview();
+    });
+  }
+
+  void _refreshMotionPreview() {
+    final text = _text.text.trim();
+    setState(() {
+      _motionPreview = text.isEmpty
+          ? null
+          : AvatarMotionService.instance.findMotionSequence(text);
+    });
+  }
 
   @override
   void dispose() {
@@ -1195,9 +1314,13 @@ class _ReplyScreenState extends ConsumerState<ReplyScreen> {
       onResult: (words) {
         if (!mounted) return;
         setState(() {
+          _voiceInputUsed = true;
           _text.text = words;
           _text.selection = TextSelection.fromPosition(
             TextPosition(offset: _text.text.length),
+          );
+          _motionPreview = AvatarMotionService.instance.findMotionSequence(
+            words,
           );
         });
       },
@@ -1238,9 +1361,14 @@ class _ReplyScreenState extends ConsumerState<ReplyScreen> {
     try {
       await ref
           .read(sessionProvider.notifier)
-          .send(_text.text, MessageAuthor.partner);
+          .send(
+            _text.text,
+            MessageAuthor.partner,
+            source: _voiceInputUsed ? MessageSource.voice : MessageSource.typed,
+          );
       if (mounted) {
         _text.clear();
+        _voiceInputUsed = false;
         context.push('/avatar');
       }
     } catch (_) {
@@ -1264,24 +1392,28 @@ class _ReplyScreenState extends ConsumerState<ReplyScreen> {
               children: [
                 Text(
                   'Voice Note',
-                  style: Theme.of(context).textTheme.headlineMedium,
+                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(height: 14),
                 SurfaceCard(
+                  padding: const EdgeInsets.all(14),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(
                         children: [
                           Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: const BoxDecoration(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(
                               shape: BoxShape.circle,
-                              color: AppColors.pale,
+                              color: AppColors.primary.withValues(alpha: 0.1),
                             ),
-                            child: const DesignIcon('00290', size: 18),
+                            child: const DesignIcon('00290', size: 16),
                           ),
-                          const SizedBox(width: 10),
+                          const SizedBox(width: 8),
                           const Text(
                             'Pesan sebelumnya',
                             style: TextStyle(
@@ -1292,51 +1424,58 @@ class _ReplyScreenState extends ConsumerState<ReplyScreen> {
                           ),
                         ],
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 10),
                       Text(
                         session.signerText ??
                             'Belum ada pesan. Kamu bisa langsung mengetik balasan.',
                         style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          height: 1.4,
                         ),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(height: 14),
                 Container(
-                  padding: const EdgeInsets.all(14),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 12,
+                  ),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFFFF3E7),
+                    color: const Color(0xFFFFF7ED),
                     borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: const Color(0xFFFFEDD5)),
                   ),
                   child: const Row(
                     children: [
-                      DesignIcon('86761', size: 22),
-                      SizedBox(width: 12),
+                      DesignIcon('86761', size: 20),
+                      SizedBox(width: 10),
                       Expanded(
                         child: Text(
                           'Bicara dengan tombol mikrofon atau ketik balasan untuk ditampilkan sebagai teks.',
                           style: TextStyle(
-                            fontSize: 13,
+                            fontSize: 12.5,
                             fontWeight: FontWeight.w600,
+                            color: Color(0xFF9A3412),
                           ),
                         ),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(height: 16),
                 const Row(
                   children: [
-                    DesignIcon('8593f', size: 18),
-                    SizedBox(width: 8),
+                    DesignIcon('8593f', size: 16),
+                    SizedBox(width: 6),
                     Text(
-                      'Pesan',
+                      'Pesan Balasan',
                       style: TextStyle(
                         color: AppColors.primary,
-                        fontWeight: FontWeight.w600,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13,
                       ),
                     ),
                   ],
@@ -1348,7 +1487,7 @@ class _ReplyScreenState extends ConsumerState<ReplyScreen> {
                   maxLines: 7,
                   maxLength: 5000,
                   enabled: !_saving,
-                  onChanged: (_) => setState(() {}),
+                  onChanged: (_) => _refreshMotionPreview(),
                   decoration: InputDecoration(
                     hintText: 'Ketik atau rekam balasan suara di sini...',
                     suffixIcon: _text.text.isNotEmpty
@@ -1357,12 +1496,57 @@ class _ReplyScreenState extends ConsumerState<ReplyScreen> {
                             icon: const Icon(Icons.clear, size: 18),
                             onPressed: () {
                               _text.clear();
-                              setState(() {});
+                              _voiceInputUsed = false;
+                              _refreshMotionPreview();
                             },
                           )
                         : null,
                   ),
                 ),
+                if (_motionPreview != null &&
+                    (_motionPreview!.motions.isNotEmpty ||
+                        _motionPreview!.unmatchedWords.isNotEmpty)) ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: AppColors.pale,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Hasil pemetaan avatar',
+                          style: TextStyle(
+                            color: AppColors.primary,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        if (_motionPreview!.motions.isNotEmpty) ...[
+                          const SizedBox(height: 6),
+                          Text(
+                            _motionPreview!.motions
+                                .map((motion) => motion.gloss)
+                                .join(' → '),
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                        ],
+                        if (_motionPreview!.unmatchedWords.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'Belum ada motion: ${_motionPreview!.unmatchedWords.toSet().join(', ')}',
+                            style: const TextStyle(
+                              color: AppColors.muted,
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
                 if (_listening) ...[
                   const SizedBox(height: 12),
                   Container(
@@ -1468,22 +1652,36 @@ class _ReplyScreenState extends ConsumerState<ReplyScreen> {
                   icon: const DesignIcon('65602', color: Colors.white),
                   label: Text(_saving ? 'Menyimpan...' : 'Kirim Balasan'),
                 ),
-                const SizedBox(height: 40),
-                const Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    DesignIcon('11a6f', size: 16),
-                    SizedBox(width: 8),
-                    Flexible(
-                      child: Text(
-                        'Balasan selalu ditampilkan sebagai teks.',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Color(0xFF287A57),
-                        ),
-                      ),
+                const SizedBox(height: 20),
+                Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
                     ),
-                  ],
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF0FDF4),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: const Color(0xFFDCFCE7)),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        DesignIcon('11a6f', size: 14),
+                        SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            'Balasan selalu ditampilkan sebagai teks.',
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF166534),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -1505,11 +1703,17 @@ class _AvatarScreenState extends ConsumerState<AvatarScreen> {
   WebViewController? _controller;
   bool _isLoading = true;
   bool _avatarReady = false;
+  String? _avatarError;
   String _selectedMotionId = '';
   String _activeGloss = '';
   double _currentSpeed = 1.0;
   bool _isPlaying = true;
   String? _detectedGestureName;
+  List<AvatarMotionItem> _motionQueue = const [];
+  List<String> _unmatchedMotionWords = const [];
+  int _motionQueueIndex = 0;
+  int _sequenceGeneration = 0;
+  bool _automaticSequence = false;
   Timer? _loadingTimeoutTimer;
   Timer? _verificationTimer;
   final _speech = SpeechService();
@@ -1548,23 +1752,35 @@ class _AvatarScreenState extends ConsumerState<AvatarScreen> {
       // Cek apakah ada balasan dari langkah 2 yang cocok dengan kata isyarat
       final reply = ref.read(sessionProvider).replyText;
       if (reply != null && reply.trim().isNotEmpty) {
-        final match = AvatarMotionService.instance.findMotionForText(reply);
-        if (match != null) {
-          _selectedMotionId = match.id;
-          _activeGloss = match.gloss;
-          _detectedGestureName = match.gloss;
+        final sequence = AvatarMotionService.instance.findMotionSequence(reply);
+        _motionQueue = sequence.motions;
+        _unmatchedMotionWords = sequence.unmatchedWords;
+        _automaticSequence = _motionQueue.isNotEmpty;
+        if (_motionQueue.isNotEmpty) {
+          final first = _motionQueue.first;
+          _selectedMotionId = first.id;
+          _activeGloss = first.gloss;
+          _detectedGestureName = _motionQueue
+              .map((motion) => motion.gloss)
+              .join(' → ');
+        } else {
+          // Jangan memainkan motion lain sebagai fallback untuk teks yang tidak
+          // dikenal. Pose netral lebih jujur daripada gerakan yang keliru.
+          _selectedMotionId = '';
+          _activeGloss = 'Pose netral';
+          _detectedGestureName = null;
+          _isPlaying = false;
         }
       }
 
       // Pasang safety timeout agar tidak hang selamanya jika perangkat lambat
       _loadingTimeoutTimer?.cancel();
-      _loadingTimeoutTimer = Timer(const Duration(seconds: 8), () {
+      _loadingTimeoutTimer = Timer(const Duration(seconds: 18), () {
         if (mounted && _isLoading) {
-          debugPrint(
-            '[AvatarScreen] Loading timeout (8s) - melepaskan blocker overlay.',
-          );
+          debugPrint('[AvatarScreen] Loading timeout (18s).');
           setState(() {
             _isLoading = false;
+            _avatarError = 'Avatar belum berhasil dimuat. Coba segarkan.';
           });
         }
       });
@@ -1606,6 +1822,7 @@ class _AvatarScreenState extends ConsumerState<AvatarScreen> {
       if (mounted) {
         setState(() {
           _isLoading = false;
+          _avatarError = 'Avatar gagal dibuka: $e';
         });
       }
     }
@@ -1637,8 +1854,9 @@ class _AvatarScreenState extends ConsumerState<AvatarScreen> {
             setState(() {
               _avatarReady = true;
               _isLoading = false;
+              _avatarError = null;
             });
-            _controller?.runJavaScript("loadMotion('$_selectedMotionId')");
+            _startMotionPlayback();
             _speakReply();
           }
         }
@@ -1658,35 +1876,41 @@ class _AvatarScreenState extends ConsumerState<AvatarScreen> {
   void _handleJsMessage(String message) {
     try {
       debugPrint('[AvatarScreen JS]: $message');
-      if (message.contains('avatar_ready')) {
+      final payload = jsonDecode(message) as Map<String, dynamic>;
+      final type = payload['type'] as String? ?? '';
+      if (type == 'avatar_ready') {
+        if (_avatarReady) return;
         _loadingTimeoutTimer?.cancel();
         _verificationTimer?.cancel();
         if (mounted) {
           setState(() {
             _avatarReady = true;
             _isLoading = false;
+            _avatarError = null;
           });
-          // Muat gerakan terpilih
-          _controller?.runJavaScript("loadMotion('$_selectedMotionId')");
+          _startMotionPlayback();
           // Bacakan balasan sebagai voice note
           _speakReply();
         }
-      } else if (message.contains('avatar_error') ||
-          message.contains('js_error')) {
+      } else if (type == 'avatar_error' || type == 'js_error') {
         debugPrint('[AvatarScreen] Avatar JS reported error: $message');
         _loadingTimeoutTimer?.cancel();
         _verificationTimer?.cancel();
         if (mounted) {
           setState(() {
             _isLoading = false;
+            _avatarError =
+                'Avatar gagal dimuat. Periksa koneksi lokal lalu coba segarkan.';
           });
         }
-      } else if (message.contains('motion_loaded')) {
+      } else if (type == 'motion_loaded') {
         if (mounted) {
           setState(() {
             _isPlaying = true;
           });
         }
+      } else if (type == 'motion_finished') {
+        _playNextQueuedMotion();
       }
     } catch (e) {
       debugPrint('[AvatarScreen] Error parsing JS msg: $e');
@@ -1694,12 +1918,65 @@ class _AvatarScreenState extends ConsumerState<AvatarScreen> {
   }
 
   void _switchMotion(String motionId, String gloss) {
+    _sequenceGeneration++;
     setState(() {
+      _automaticSequence = false;
+      _motionQueue = const [];
+      _unmatchedMotionWords = const [];
+      _motionQueueIndex = 0;
       _selectedMotionId = motionId;
       _activeGloss = gloss;
+      _detectedGestureName = null;
       _isPlaying = true;
     });
-    _controller?.runJavaScript("loadMotion('$motionId')");
+    _controller?.runJavaScript('loadMotion(${jsonEncode(motionId)}, false)');
+  }
+
+  void _startMotionPlayback() {
+    if (!_avatarReady || _controller == null) return;
+    _sequenceGeneration++;
+    _motionQueueIndex = 0;
+    if (_automaticSequence && _motionQueue.isNotEmpty) {
+      _playQueuedMotion();
+      return;
+    }
+    if (_selectedMotionId.isNotEmpty) {
+      _controller?.runJavaScript(
+        'loadMotion(${jsonEncode(_selectedMotionId)}, false)',
+      );
+    }
+  }
+
+  void _playQueuedMotion() {
+    if (!_automaticSequence ||
+        _motionQueueIndex < 0 ||
+        _motionQueueIndex >= _motionQueue.length) {
+      return;
+    }
+    final motion = _motionQueue[_motionQueueIndex];
+    if (mounted) {
+      setState(() {
+        _selectedMotionId = motion.id;
+        _activeGloss = motion.gloss;
+        _isPlaying = true;
+      });
+    }
+    _controller?.runJavaScript('loadMotion(${jsonEncode(motion.id)}, true)');
+  }
+
+  Future<void> _playNextQueuedMotion() async {
+    if (!_automaticSequence) return;
+    if (_motionQueueIndex + 1 >= _motionQueue.length) {
+      if (mounted) setState(() => _isPlaying = false);
+      return;
+    }
+    final generation = _sequenceGeneration;
+    _motionQueueIndex++;
+    await Future<void>.delayed(const Duration(milliseconds: 180));
+    if (!mounted || generation != _sequenceGeneration || !_automaticSequence) {
+      return;
+    }
+    _playQueuedMotion();
   }
 
   void _togglePlay() {
@@ -1710,10 +1987,12 @@ class _AvatarScreenState extends ConsumerState<AvatarScreen> {
   }
 
   void _replay() {
-    setState(() {
-      _isPlaying = true;
-    });
-    _controller?.runJavaScript("replay()");
+    if (_automaticSequence && _motionQueue.isNotEmpty) {
+      _startMotionPlayback();
+    } else {
+      setState(() => _isPlaying = true);
+      _controller?.runJavaScript('replay()');
+    }
   }
 
   void _setSpeed(double speed) {
@@ -1725,6 +2004,24 @@ class _AvatarScreenState extends ConsumerState<AvatarScreen> {
 
   void _setCameraPreset(String mode) {
     _controller?.runJavaScript("setCameraPreset('$mode')");
+  }
+
+  void _retryAvatar() {
+    setState(() {
+      _isLoading = true;
+      _avatarReady = false;
+      _avatarError = null;
+    });
+    _loadingTimeoutTimer?.cancel();
+    _loadingTimeoutTimer = Timer(const Duration(seconds: 18), () {
+      if (mounted && _isLoading) {
+        setState(() {
+          _isLoading = false;
+          _avatarError = 'Avatar belum berhasil dimuat. Coba segarkan.';
+        });
+      }
+    });
+    _controller?.reload();
   }
 
   @override
@@ -1748,21 +2045,7 @@ class _AvatarScreenState extends ConsumerState<AvatarScreen> {
           IconButton(
             tooltip: 'Segarkan Avatar',
             icon: const Icon(Icons.refresh, size: 20),
-            onPressed: () {
-              setState(() {
-                _isLoading = true;
-                _avatarReady = false;
-              });
-              _loadingTimeoutTimer?.cancel();
-              _loadingTimeoutTimer = Timer(const Duration(seconds: 8), () {
-                if (mounted && _isLoading) {
-                  setState(() {
-                    _isLoading = false;
-                  });
-                }
-              });
-              _controller?.reload();
-            },
+            onPressed: _retryAvatar,
           ),
         ],
       ),
@@ -1881,7 +2164,9 @@ class _AvatarScreenState extends ConsumerState<AvatarScreen> {
                           ),
                           const SizedBox(width: 6),
                           Text(
-                            'Gerakan: $_activeGloss',
+                            _automaticSequence && _motionQueue.isNotEmpty
+                                ? 'Gerakan ${_motionQueueIndex + 1}/${_motionQueue.length}: $_activeGloss'
+                                : 'Gerakan: $_activeGloss',
                             style: const TextStyle(
                               color: Colors.white,
                               fontSize: 12,
@@ -1932,6 +2217,37 @@ class _AvatarScreenState extends ConsumerState<AvatarScreen> {
                                   fontSize: 11,
                                 ),
                               ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  if (_avatarError != null && !_isLoading)
+                    Container(
+                      color: const Color(0xFF090D16),
+                      child: Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.error_outline,
+                              color: Color(0xFFF59E0B),
+                            ),
+                            const SizedBox(height: 10),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 24,
+                              ),
+                              child: Text(
+                                _avatarError!,
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(color: Colors.white70),
+                              ),
+                            ),
+                            TextButton.icon(
+                              onPressed: _retryAvatar,
+                              icon: const Icon(Icons.refresh),
+                              label: const Text('Coba lagi'),
                             ),
                           ],
                         ),
@@ -2139,6 +2455,27 @@ class _AvatarScreenState extends ConsumerState<AvatarScreen> {
                       fontWeight: FontWeight.w600,
                     ),
                   ),
+                  if (_motionQueue.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      'Urutan gerakan: ${_motionQueue.map((motion) => motion.gloss).join(' → ')}',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.primary,
+                      ),
+                    ),
+                  ],
+                  if (_unmatchedMotionWords.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      'Belum ada motion manual: ${_unmatchedMotionWords.toSet().join(', ')}',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: AppColors.muted,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -2158,10 +2495,15 @@ class _AvatarScreenState extends ConsumerState<AvatarScreen> {
 
   Widget _buildPresetChip(String label, String mode) {
     return ActionChip(
-      label: Text(label, style: const TextStyle(fontSize: 11)),
+      label: Text(
+        label,
+        style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600),
+      ),
       onPressed: () => _setCameraPreset(mode),
       backgroundColor: Colors.white,
-      padding: const EdgeInsets.symmetric(horizontal: 4),
+      side: const BorderSide(color: Color(0xFFE2E8F0)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
     );
   }
 
@@ -2171,20 +2513,18 @@ class _AvatarScreenState extends ConsumerState<AvatarScreen> {
       onTap: () => _setSpeed(speed),
       borderRadius: BorderRadius.circular(8),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
         decoration: BoxDecoration(
-          color: isSelected ? AppColors.primary : Colors.transparent,
+          color: isSelected ? AppColors.primary : Colors.white,
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
-            color: isSelected
-                ? AppColors.primary
-                : AppColors.border.withValues(alpha: 0.5),
+            color: isSelected ? AppColors.primary : const Color(0xFFE2E8F0),
           ),
         ),
         child: Text(
           label,
           style: TextStyle(
-            fontSize: 11,
+            fontSize: 11.5,
             fontWeight: FontWeight.w700,
             color: isSelected ? Colors.white : AppColors.muted,
           ),

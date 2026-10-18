@@ -119,4 +119,43 @@ void main() {
       isFalse,
     );
   });
+
+  test('deleteConversation removes conversation and cascades messages', () async {
+    await database.saveMessage(conversation(), message());
+    expect(await database.listConversations('guest'), isNotEmpty);
+    expect(await database.messages('guest', 'conversation-1'), isNotEmpty);
+
+    await database.deleteConversation('guest', 'conversation-1');
+    expect(await database.listConversations('guest'), isEmpty);
+    expect(await database.messages('guest', 'conversation-1'), isEmpty);
+  });
+
+  test('clearHistory removes all conversations and messages for owner', () async {
+    await database.saveMessage(conversation(), message());
+    await database.saveMessage(
+      Conversation(
+        id: 'conversation-2',
+        ownerId: 'guest',
+        title: 'Percakapan 2',
+        location: '',
+        createdAt: time,
+        updatedAt: time,
+      ),
+      ChatMessage(
+        id: 'message-2',
+        conversationId: 'conversation-2',
+        ownerId: 'guest',
+        author: MessageAuthor.partner,
+        source: MessageSource.voice,
+        content: 'Halo.',
+        createdAt: time,
+      ),
+    );
+    expect((await database.listConversations('guest')).length, 2);
+
+    await database.clearHistory('guest');
+    expect(await database.listConversations('guest'), isEmpty);
+    expect(await database.messages('guest', 'conversation-1'), isEmpty);
+    expect(await database.messages('guest', 'conversation-2'), isEmpty);
+  });
 }

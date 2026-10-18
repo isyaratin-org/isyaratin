@@ -157,16 +157,19 @@ class StepHeader extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     width: double.infinity,
     alignment: Alignment.center,
-    padding: const EdgeInsets.all(12),
+    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
     decoration: const BoxDecoration(
       color: Colors.white,
-      border: Border(bottom: BorderSide(color: Color(0xFFD9E3E7))),
+      border: Border(bottom: BorderSide(color: Color(0xFFE2EBF0))),
     ),
     child: Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
       decoration: BoxDecoration(
-        color: const Color(0xFFE4F2F3),
+        color: const Color(0xFFE6F4F5),
         borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: AppColors.primary.withValues(alpha: 0.18),
+        ),
       ),
       child: Text(
         label,
@@ -174,6 +177,7 @@ class StepHeader extends StatelessWidget {
           color: AppColors.primary,
           fontSize: 11.5,
           fontWeight: FontWeight.w700,
+          letterSpacing: 0.2,
         ),
       ),
     ),

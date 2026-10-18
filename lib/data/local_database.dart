@@ -135,6 +135,20 @@ class LocalDatabase extends GeneratedDatabase {
     );
   }
 
+  Future<void> deleteConversation(String ownerId, String id) async {
+    await customStatement(
+      'DELETE FROM conversations WHERE owner_id = ? AND id = ?',
+      [ownerId, id],
+    );
+  }
+
+  Future<void> clearHistory(String ownerId) async {
+    await customStatement(
+      'DELETE FROM conversations WHERE owner_id = ?',
+      [ownerId],
+    );
+  }
+
   Future<void> markSynced(Conversation snapshot) => customStatement(
     '''
     UPDATE conversations SET pending = 0 WHERE id = ? AND owner_id = ? AND updated_at = ?

@@ -7,6 +7,7 @@ import 'package:intl/date_symbol_data_local.dart';
 import 'package:isyaratin/app.dart';
 import 'package:isyaratin/core/providers.dart';
 import 'package:isyaratin/data/local_database.dart';
+import 'package:isyaratin/data/models.dart';
 
 void main() {
   setUpAll(() async {
@@ -144,6 +145,103 @@ void main() {
     }
     await tester.pumpWidget(const SizedBox.shrink());
   });
+
+  test('history preserves whether a message came from voice or sign', () async {
+    final database = LocalDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    final container = ProviderContainer(
+      overrides: [databaseProvider.overrideWithValue(database)],
+    );
+    addTearDown(container.dispose);
+    final controller = container.read(sessionProvider.notifier);
+    controller.enterGuest();
+
+    await controller.send(
+      'Gerakan kamera',
+      MessageAuthor.signer,
+      source: MessageSource.sign,
+    );
+    await controller.send(
+      'Balasan suara',
+      MessageAuthor.partner,
+      source: MessageSource.voice,
+    );
+
+    final conversation = (await database.listConversations('guest')).single;
+    final messages = await database.messages('guest', conversation.id);
+    expect(messages.map((message) => message.source), [
+      MessageSource.sign,
+      MessageSource.voice,
+    ]);
+  });
+
+  test('history can be deleted individually and cleared completely', () async {
+    final database = LocalDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    final container = ProviderContainer(
+      overrides: [databaseProvider.overrideWithValue(database)],
+    );
+    addTearDown(container.dispose);
+    final controller = container.read(sessionProvider.notifier);
+    controller.enterGuest();
+
+    await controller.send('Pesan 1', MessageAuthor.signer);
+    final conv1 = (await database.listConversations('guest')).single;
+
+    controller.newConversation();
+    await controller.send('Pesan 2', MessageAuthor.signer);
+    expect((await database.listConversations('guest')).length, 2);
+
+    await controller.deleteConversation(conv1.id);
+    final remaining = await database.listConversations('guest');
+    expect(remaining.length, 1);
+    expect(remaining.single.id, isNot(conv1.id));
+    expect(await database.messages('guest', conv1.id), isEmpty);
+
+    await controller.clearHistory();
+    expect(await database.listConversations('guest'), isEmpty);
+  });
+
+  testWidgets(
+    'deleting conversation from detail screen removes it from history',
+    (tester) async {
+      final database = LocalDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      final container = ProviderContainer(
+        overrides: [databaseProvider.overrideWithValue(database)],
+      );
+      addTearDown(container.dispose);
+      final controller = container.read(sessionProvider.notifier);
+      controller.enterGuest();
+      await controller.send('Pesan hapus uji coba', MessageAuthor.signer);
+      final conv = (await database.listConversations('guest')).single;
+
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: const IsyaratinApp(),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Riwayat'));
+      await tester.pumpAndSettle();
+      expect(find.text(conv.title), findsOneWidget);
+
+      await tester.tap(find.text(conv.title));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Hapus percakapan'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Hapus Percakapan?'), findsOneWidget);
+      await tester.tap(find.widgetWithText(FilledButton, 'Hapus'));
+      await tester.pumpAndSettle();
+
+      expect(await database.listConversations('guest'), isEmpty);
+      expect(find.text('Belum ada percakapan'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
 }
 
 // SQLite native-library initialization can finish between rendered frames.

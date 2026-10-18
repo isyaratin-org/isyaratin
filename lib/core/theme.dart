@@ -7,6 +7,7 @@ abstract final class AppColors {
   static const muted = Color(0xFF6B7280);
   static const border = Color(0xFFEAF2F4);
   static const pale = Color(0xFFE6F3F5);
+  static const error = Color(0xFFDC2626);
 }
 
 ThemeData buildTheme() => ThemeData(
@@ -20,14 +21,16 @@ ThemeData buildTheme() => ThemeData(
   scaffoldBackgroundColor: AppColors.background,
   textTheme: const TextTheme(
     headlineMedium: TextStyle(
-      fontSize: 26,
+      fontSize: 24,
       fontWeight: FontWeight.w800,
       color: AppColors.text,
+      letterSpacing: -0.3,
     ),
     titleLarge: TextStyle(
-      fontSize: 22,
+      fontSize: 20,
       fontWeight: FontWeight.w700,
       color: AppColors.text,
+      letterSpacing: -0.2,
     ),
     titleMedium: TextStyle(
       fontSize: 16,
@@ -36,7 +39,7 @@ ThemeData buildTheme() => ThemeData(
     ),
     bodyLarge: TextStyle(fontSize: 14, height: 1.5, color: AppColors.text),
     bodyMedium: TextStyle(fontSize: 14, height: 1.5, color: AppColors.text),
-    bodySmall: TextStyle(fontSize: 12, height: 1.5, color: AppColors.muted),
+    bodySmall: TextStyle(fontSize: 12, height: 1.4, color: AppColors.muted),
   ),
   appBarTheme: const AppBarTheme(
     backgroundColor: Colors.white,
@@ -45,14 +48,15 @@ ThemeData buildTheme() => ThemeData(
     scrolledUnderElevation: 0,
     titleTextStyle: TextStyle(
       fontFamily: 'Inter',
-      fontSize: 20,
+      fontSize: 18,
       fontWeight: FontWeight.w700,
       color: AppColors.text,
     ),
   ),
   filledButtonTheme: FilledButtonThemeData(
     style: FilledButton.styleFrom(
-      minimumSize: const Size.fromHeight(52),
+      minimumSize: const Size.fromHeight(50),
+      elevation: 0,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       textStyle: const TextStyle(
         fontFamily: 'Inter',
@@ -63,7 +67,7 @@ ThemeData buildTheme() => ThemeData(
   ),
   outlinedButtonTheme: OutlinedButtonThemeData(
     style: OutlinedButton.styleFrom(
-      minimumSize: const Size.fromHeight(52),
+      minimumSize: const Size.fromHeight(50),
       foregroundColor: AppColors.primary,
       side: const BorderSide(color: AppColors.primary, width: 1.4),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
@@ -77,18 +81,18 @@ ThemeData buildTheme() => ThemeData(
   inputDecorationTheme: InputDecorationTheme(
     filled: true,
     fillColor: Colors.white,
-    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-    hintStyle: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 14),
+    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+    hintStyle: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 13.5),
     border: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(12),
-      borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+      borderRadius: BorderRadius.circular(14),
+      borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
     ),
     enabledBorder: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(12),
-      borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+      borderRadius: BorderRadius.circular(14),
+      borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
     ),
     focusedBorder: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(14),
       borderSide: const BorderSide(color: AppColors.primary, width: 1.5),
     ),
   ),

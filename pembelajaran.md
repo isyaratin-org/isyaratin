@@ -554,4 +554,80 @@ Saat membuka layar Langkah 3 (Avatar Merespon), indikator loading menampilkan pe
    - **Tombol Alternatif Manual**: Menambahkan tombol `Buka Tampilan 3D Langsung` di dalam overlay loading agar pengguna dapat membuka canvas 3D sewaktu-waktu.
    - **Pembaruan Aksi Segarkan**: Tombol refresh di AppBar kini mengatur ulang safety timeout dan memuat ulang WebView secara bersih.
 
+## 16. Penyempurnaan UI Styling, Modernisasi Komponen, & Eliminasi Bloat Teks Kamera
+
+### A. Latar Belakang & Kebutuhan Pengguna
+Pengguna menginginkan antarmuka aplikasi ditingkatkan agar lebih rapi, modern, dan tidak bloat (tidak terlalu bulky/penuh sesak dengan elemen deskripsi redundan), namun tetap mempertahankan seluruh fungsi, alur, dan informasi penting yang sudah ada. Secara spesifik, pada layar kamera ([CameraScreen](file:///d:/Project/4mlai/apapun/isyaratin/lib/features/conversation/conversation_screens.dart)), teks instruksi di bawah tombol rekam dihilangkan agar interface menjadi lebih bersih, ringkas, dan langsung berfokus pada kontrol utama.
+
+### B. Rincian Implementasi Perubahan
+
+1. **Eliminasi Teks di Bawah Tombol Kamera (`CameraScreen`)**:
+   - Menghapus teks penjelas di bawah tombol rekam utama (`"Rekam gerakan total di depan kamera, lalu tekan Berhenti untuk menganalisis perkata."`).
+   - Menghapus teks penjelas di bawah tombol rekam saat aktif (`"Peragakan gerakan isyarat. Tekan Berhenti & Terjemahkan saat selesai."`).
+   - Menyesuaikan padding pada [SurfaceCard](file:///d:/Project/4mlai/apapun/isyaratin/lib/core/widgets.dart) kontrol rekam menjadi `EdgeInsets.symmetric(horizontal: 14, vertical: 12)`, menghasilkan area tombol yang compact, proporsional, dan elegan.
+   - Memperhalus tombol toolbar atas kamera (jeda kamera & putar kamera) dengan border sirkular tipis semi-transparan `white.withValues(alpha: 0.18)` dan padding 7px yang presisi.
+
+2. **Modernisasi Bilah Navigasi Bawah ([AppShell](file:///d:/Project/4mlai/apapun/isyaratin/lib/core/router.dart))**:
+   - Mengubah indikator tab aktif dari blok solid teal persegi kaku menjadi konsep *active pill indicator* modern: ikon dibungkus dalam kapsul halus bertransparansi lembut (`AppColors.primary.withValues(alpha: 0.12)`), teks label berbobot semibold/bold dengan warna primary, dan tab non-aktif menggunakan warna slate grey netral (`0xFF64748B`).
+   - Mengekstraksi komponen ke widget privat `_NavItem` yang bersih, modular, dan bebas error overflow.
+
+3. **Penyempurnaan Header Langkah & Tip Banner ([conversation_screens.dart](file:///d:/Project/4mlai/apapun/isyaratin/lib/features/conversation/conversation_screens.dart))**:
+   - [StepHeader](file:///d:/Project/4mlai/apapun/isyaratin/lib/core/widgets.dart): Menggunakan garis pembatas netral `0xFFE2EBF0` dan border halus pada badge pill langkah isyarat (`AppColors.primary.withValues(alpha: 0.18)`), menciptakan hierarki yang tajam.
+   - `ReplyScreen`: Merapikan banner panduan suara dengan palet amber lembut (`0xFFFFF7ED`, border `0xFFFFEDD5`, teks `0xFF9A3412`) serta mengonversi catatan kaki menjadi badge pill hijau pastel ramah mata (`0xFFF0FDF4`). Menggunakan widget `Flexible` untuk menjamin keamanan teks dari potensi overflow pada layar sempit dan skala teks besar (1.5x).
+   - Memangkas jarak kosong vertikal yang berlebihan (dari 24-40px ke 12-20px) agar pengguna tidak perlu banyak melakukan scrolling.
+
+4. **Kerapian Tile Riwayat & Preset Avatar**:
+   - [ConversationTile](file:///d:/Project/4mlai/apapun/isyaratin/lib/features/history/history_screen.dart): Diberi border halus `0xFFE2EBF0` dan bayangan lembut berdensitas rendah (`0x06000000`), meningkatkan keterbacaan setiap item riwayat percakapan.
+   - `AvatarScreen`: Menstandarkan chip preset sudut kamera dan tombol pemilihan kecepatan (`0.5x`, `1.0x`, `1.5x`) dengan border terpadu dan sudut lengkung 8-10px.
+
+### C. Hasil Pengujian & Verifikasi
+- `flutter analyze`: Berhasil lolos dengan **0 issues / warnings**.
+- `flutter test`: Seluruh 17 pengujian otomasi berhasil lolos (`All tests passed!`), termasuk skenario layar sempit 320x640 dengan *textScaleFactor 1.5x*.
+
+## 17. Implementasi Fitur Penghapusan Riwayat Percakapan (Satuan & Sekaligus)
+
+### A. Latar Belakang & Kebutuhan Pengguna
+Pengguna menginginkan fitur untuk menghapus riwayat percakapan di aplikasi ISYARATIN. Fitur ini penting untuk menjaga privasi pengguna, mengelola ruang penyimpanan lokal, dan membersihkan transkrip yang sudah tidak relevan baik secara satuan maupun sekaligus (*clear all history*).
+
+### B. Arsitektur & Cascade Deletion (SQLite & Cloud Sync)
+
+1. **Foreign Key Cascade di Database Lokal (`LocalDatabase`)**:
+   - Skema database di [lib/data/local_database.dart](file:///d:/Project/4mlai/apapun/isyaratin/lib/data/local_database.dart) telah dirancang dengan `FOREIGN KEY(conversation_id, owner_id) REFERENCES conversations(id, owner_id) ON DELETE CASCADE` dan pengaktifan `PRAGMA foreign_keys = ON`.
+   - Ditambahkan method:
+     - `deleteConversation(String ownerId, String id)`: Menghapus satu record dari tabel `conversations` yang otomatis menghapus seluruh pesan terkait di tabel `messages`.
+     - `clearHistory(String ownerId)`: Menghapus seluruh percakapan milik pengguna/tamu tertentu.
+
+2. **Pengelolaan State & Sinkronisasi Cloud (`SessionController`)**:
+   - Di [lib/core/providers.dart](file:///d:/Project/4mlai/apapun/isyaratin/lib/core/providers.dart), ditambahkan method:
+     - `deleteConversation(String id)`:
+       - Menghapus record secara lokal di database Drift.
+       - Jika percakapan yang dihapus adalah percakapan aktif di memori session (`state.conversationId == id`), state percakapan direset bersih (`withConversation(null, null, null)`).
+       - Melakukan invalidasi provider (`historyProvider` & `messagesProvider`) agar UI langsung reaktif terbarui.
+       - Menjalankan *best-effort remote deletion* pada tabel `messages` dan `conversations` di Supabase jika pengguna sedang masuk dengan akun.
+     - `clearHistory()`:
+       - Mengosongkan seluruh riwayat lokal untuk owner aktif, mereset state percakapan aktif, merefresh provider, dan menghapus riwayat cloud di Supabase secara *best-effort*.
+
+3. **Standarisasi Warna Error (`AppColors.error`)**:
+   - Menambahkan token warna `static const error = Color(0xFFDC2626);` di [lib/core/theme.dart](file:///d:/Project/4mlai/apapun/isyaratin/lib/core/theme.dart) untuk aksi destruktif yang konsisten dan ramah aksesibilitas.
+
+### C. Desain UI & Multi-Channel Discovery
+
+1. **Aksi Penghapusan di `HistoryScreen`**:
+   - **Hapus Semua Riwayat**: Di `SectionHeader`, ditambahkan ikon `delete_sweep_outlined` (jika riwayat tidak kosong) dengan tooltip dan visual density compact agar tetap proporsional dan tidak overflow di layar kecil (320px).
+   - **Swipe-to-Delete (`Dismissible`)**: Setiap kartu percakapan dapat digeser ke kiri, menampilkan indikator latar belakang merah dengan ikon tong sampah, lalu memicu dialog konfirmasi sebelum dihapus.
+   - **Menu Opsi Cepat (`PopupMenuButton`)**: Di sisi kanan kartu percakapan disediakan tombol `Icons.more_vert` dengan opsi "Hapus" berwarna merah.
+   - **Long-Press Gesture**: Pengguna juga dapat menekan lama kartu percakapan untuk langsung memunculkan konfirmasi hapus.
+
+2. **Aksi Penghapusan di `ConversationDetailScreen`**:
+   - Menambahkan tombol ikon tong sampah (`Icons.delete_outline`) berwarna merah pada `AppBar.actions`.
+   - Menampilkan dialog konfirmasi ramah pengguna: *"Percakapan '[Judul]' dan seluruh pesan di dalamnya akan dihapus secara permanen."*
+   - Setelah konfirmasi berhasil, otomatis kembali ke halaman riwayat (`context.pop()` / `context.go('/history')`) dan menampilkan feedback SnackBar informatif.
+
+### D. Hasil Pengujian & Verifikasi
+- **Unit Test Database**: Pengujian baru di [test/local_database_test.dart](file:///d:/Project/4mlai/apapun/isyaratin/test/local_database_test.dart) menguji bahwa `deleteConversation` dan `clearHistory` benar-benar menghapus percakapan dan pesan terkait secara tuntas melalui mekanisme cascade.
+- **Widget & Flow Test**: Pengujian di [test/app_flow_test.dart](file:///d:/Project/4mlai/apapun/isyaratin/test/app_flow_test.dart) menguji alur penghapusan satuan dari layar detail hingga update otomatis daftar riwayat.
+- **Pemeriksaan Analisis**: `flutter analyze` menghasilkan **0 issues**.
+- **Hasil Pengujian Penuh**: `flutter test` berhasil lolos **22 dari 22 pengujian (100% Passed)**.
+
+
 

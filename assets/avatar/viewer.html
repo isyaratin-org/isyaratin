@@ -222,11 +222,14 @@
       let currentTimeMs = 0.0;
       let totalDurationMs = 2800.0;
       let playbackSpeed = 1.0;
+      let playOnce = false;
+      let motionFinishedNotified = false;
       let lastClockTime = performance.now();
 
       // Motion library (dari manifest JSON)
       let availableMotions = [];
       let currentMotionId = null;
+      let motionRequestSerial = 0;
 
       // Quaternion scratch objects (hindari alokasi per frame)
       const motionQuaternionA = new THREE.Quaternion();
@@ -309,10 +312,9 @@
           0.1,
           100,
         );
-        setCameraPreset("upper");
 
-        // Clipping plane: memotong semua geometri di bawah y = 1.02 (pinggang & kaki tidak terlihat)
-        clipPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -1.02);
+        // Sisakan sedikit pinggang agar tangan yang turun tetap terlihat.
+        clipPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.64);
 
         // Renderer
         renderer = new THREE.WebGLRenderer({
@@ -330,11 +332,12 @@
         controls = new THREE.OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
         controls.dampingFactor = 0.08;
-        controls.target.set(0, 1.38, 0);
+        controls.target.set(0, 1.25, 0);
         controls.minPolarAngle = Math.PI / 4; // 45 deg
         controls.maxPolarAngle = Math.PI / 2 + 0.05; // stop sebelum melihat dari bawah
         controls.minDistance = 0.7;
-        controls.maxDistance = 1.9;
+        controls.maxDistance = 2.8;
+        setCameraPreset("upper");
 
         // Lighting
         const ambient = new THREE.AmbientLight(0xffffff, 0.95);
@@ -358,7 +361,7 @@
         });
         const ring = new THREE.Mesh(ringGeo, ringMat);
         ring.rotation.x = Math.PI / 2;
-        ring.position.y = 1.015;
+        ring.position.y = 0.635;
         scene.add(ring);
 
         window.addEventListener("resize", onWindowResize);
@@ -379,17 +382,18 @@
           .forEach((b) => b.classList.remove("active"));
         if (mode === "upper") {
           document.getElementById("camUpper")?.classList.add("active");
-          camera?.position.set(0, 1.48, 1.35);
-          controls?.target.set(0, 1.38, 0);
+          camera?.position.set(0, 1.29, 2.05);
+          controls?.target.set(0, 1.25, 0);
         } else if (mode === "hands") {
           document.getElementById("camHands")?.classList.add("active");
-          camera?.position.set(0, 1.35, 0.85);
+          camera?.position.set(0, 1.35, 0.95);
           controls?.target.set(0, 1.3, 0);
         } else if (mode === "head") {
           document.getElementById("camHead")?.classList.add("active");
-          camera?.position.set(0, 1.62, 0.85);
+          camera?.position.set(0, 1.62, 1.05);
           controls?.target.set(0, 1.58, 0);
         }
+        controls?.update();
       }
 
       // 2. Muat Manifest Gerakan (id -> motionFile)
@@ -445,11 +449,16 @@
                   restPoseRotations[child.name] = child.quaternion.clone();
                 }
                 if (child.isMesh && child.material) {
+                  // Bounding box mesh skinned ini tetap kecil di pose bind, sementara
+                  // tulangnya memindahkan vertex ke tinggi badan sebenarnya.
+                  // Frustum culling default mengira seluruh avatar di luar kamera.
+                  child.frustumCulled = false;
                   child.material.clippingPlanes = [clipPlane];
                   child.material.clipShadows = true;
                   child.castShadow = true;
                 }
               });
+              resetToNeutral();
 
               window.isAvatarReady = true;
               window.avatarBoneCount = Object.keys(skeletonBones).length;
@@ -478,7 +487,8 @@
       }
 
       // 4. Motion Management (format motion_manual_*.json)
-      async function loadMotion(motionIdOrFilename) {
+      async function loadMotion(motionIdOrFilename, once = false) {
+        const requestSerial = ++motionRequestSerial;
         try {
           const file = resolveMotionFile(motionIdOrFilename);
           loadingMsg.innerText = `Memuat gerakan: ${file}...`;
@@ -486,8 +496,16 @@
           const resp = await fetch(`/motions/${file}`, { cache: "no-store" });
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 
-          motionData = await resp.json();
+          const loadedMotion = await resp.json();
+          if (requestSerial !== motionRequestSerial) return;
+          if (!Array.isArray(loadedMotion.frames) || !loadedMotion.frames.length) {
+            throw new Error(`Frame gerakan kosong: ${file}`);
+          }
+          resetToNeutral();
+          motionData = loadedMotion;
           currentMotionId = motionIdOrFilename;
+          playOnce = Boolean(once);
+          motionFinishedNotified = false;
 
           // Durasi: pakai durationMs dari file, fallback dari manifest / frame count
           const meta = availableMotions.find(
@@ -513,6 +531,7 @@
             totalFrames: motionData.totalFrames,
           });
         } catch (e) {
+          if (requestSerial !== motionRequestSerial) return;
           console.warn("Gagal memuat gerakan:", motionIdOrFilename, e);
           // Fallback: jika id tidak ditemukan (mis. id lama seperti "rumah"),
           // muat gerakan pertama dari manifest agar avatar tetap menampilkan gerakan.
@@ -521,7 +540,12 @@
             motionIdOrFilename !== availableMotions[0].id
           ) {
             console.warn("Fallback ke gerakan pertama:", availableMotions[0].id);
-            await loadMotion(availableMotions[0].id);
+            await loadMotion(availableMotions[0].id, once);
+          } else {
+            notifyFlutter("motion_error", {
+              motion: motionIdOrFilename,
+              error: String(e),
+            });
           }
         }
       }
@@ -651,7 +675,21 @@
         if (isPlaying && totalDurationMs > 0) {
           currentTimeMs += deltaSec * 1000.0 * playbackSpeed;
           if (currentTimeMs >= totalDurationMs) {
-            currentTimeMs = 0.0; // Loop gerakan
+            if (playOnce) {
+              currentTimeMs = totalDurationMs;
+              applyMotionAtTime(currentTimeMs);
+              isPlaying = false;
+              updatePlayIcon();
+              if (!motionFinishedNotified) {
+                motionFinishedNotified = true;
+                notifyFlutter("motion_finished", {
+                  motion: currentMotionId,
+                  durationMs: totalDurationMs,
+                });
+              }
+            } else {
+              currentTimeMs = 0.0;
+            }
           }
 
           applyMotionAtTime(currentTimeMs);
@@ -669,6 +707,10 @@
 
       // 7. Kontrol Playback
       function togglePlay() {
+        if (!isPlaying && currentTimeMs >= totalDurationMs) {
+          currentTimeMs = 0.0;
+          motionFinishedNotified = false;
+        }
         isPlaying = !isPlaying;
         updatePlayIcon();
       }
@@ -683,6 +725,7 @@
 
       function replay() {
         currentTimeMs = 0.0;
+        motionFinishedNotified = false;
         isPlaying = true;
         updatePlayIcon();
         applyMotionAtTime(0);
@@ -705,6 +748,18 @@
         for (const [name, bone] of Object.entries(skeletonBones)) {
           if (restPoseRotations[name]) {
             bone.quaternion.copy(restPoseRotations[name]);
+          }
+        }
+        const armAxis = new THREE.Vector3(0, 0, 1);
+        for (const [side, angle] of [["Right", -28], ["Left", 28]]) {
+          const arm = skeletonBones[`${side}Arm`];
+          if (arm) {
+            arm.quaternion.multiply(
+              new THREE.Quaternion().setFromAxisAngle(
+                armAxis,
+                THREE.MathUtils.degToRad(angle),
+              ),
+            );
           }
         }
       }

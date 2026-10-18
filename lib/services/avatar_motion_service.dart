@@ -38,6 +38,18 @@ class AvatarMotionItem {
       );
 }
 
+class AvatarMotionSequence {
+  const AvatarMotionSequence({
+    required this.motions,
+    required this.unmatchedWords,
+    required this.normalizedText,
+  });
+
+  final List<AvatarMotionItem> motions;
+  final List<String> unmatchedWords;
+  final String normalizedText;
+}
+
 class AvatarMotionService {
   AvatarMotionService._();
   static final AvatarMotionService instance = AvatarMotionService._();
@@ -52,6 +64,7 @@ class AvatarMotionService {
 
   /// Inisialisasi daftar gerakan dari manifest
   Future<void> loadManifest() async {
+    if (_motions.isNotEmpty) return;
     try {
       final jsonStr = await rootBundle.loadString(
         'assets/avatar/motions/motions_manifest.json',
@@ -223,6 +236,172 @@ class AvatarMotionService {
     return best;
   }
 
+  /// Mengubah kalimat bebas menjadi urutan motion sesuai urutan kata.
+  ///
+  /// Frasa terpanjang diprioritaskan (`buku rekening` sebelum `buku`), lalu
+  /// kata tunggal dicocokkan melalui normalisasi dan stemming ringan bahasa
+  /// Indonesia. Kata yang belum punya aset motion dikembalikan lewat
+  /// [AvatarMotionSequence.unmatchedWords], bukan diganti dengan motion lain.
+  AvatarMotionSequence findMotionSequence(String text) {
+    final normalized = _normalizeText(text);
+    final words = normalized.isEmpty ? <String>[] : normalized.split(' ');
+    final matched = <AvatarMotionItem>[];
+    final unmatched = <String>[];
+
+    final entries = _motions
+        .map(
+          (motion) => (
+            motion: motion,
+            phrases: {
+              _normalizeText(motion.gloss),
+              _normalizeText(motion.id.replaceAll('_', ' ')),
+              ...?_phraseAliases[motion.id],
+            }.where((value) => value.isNotEmpty).toList(),
+          ),
+        )
+        .toList();
+
+    var index = 0;
+    while (index < words.length) {
+      AvatarMotionItem? best;
+      var consumed = 0;
+
+      // Longest exact phrase wins, so multi-word glosses remain one motion.
+      for (final entry in entries) {
+        for (final phrase in entry.phrases) {
+          final phraseWords = phrase.split(' ');
+          if (phraseWords.length <= consumed ||
+              index + phraseWords.length > words.length) {
+            continue;
+          }
+          var same = true;
+          for (var offset = 0; offset < phraseWords.length; offset++) {
+            if (words[index + offset] != phraseWords[offset]) {
+              same = false;
+              break;
+            }
+          }
+          if (same) {
+            best = entry.motion;
+            consumed = phraseWords.length;
+          }
+        }
+      }
+
+      // Fallback untuk variasi umum seperti "ingin" -> "mau" dan
+      // "dibawa" -> "membawa". Hanya motion satu kata yang dipakai agar
+      // frasa tidak terpotong menjadi arti yang berbeda.
+      if (best == null) {
+        final inputRoot = _motionRoot(words[index]);
+        for (final entry in entries) {
+          final singleWords = entry.phrases
+              .where((phrase) => !phrase.contains(' '))
+              .toList();
+          if (singleWords.any((word) => _motionRoot(word) == inputRoot)) {
+            best = entry.motion;
+            consumed = 1;
+            break;
+          }
+        }
+      }
+
+      if (best != null) {
+        matched.add(best);
+        index += consumed;
+      } else {
+        if (!_ignoredGrammarWords.contains(words[index])) {
+          unmatched.add(words[index]);
+        }
+        index++;
+      }
+    }
+
+    return AvatarMotionSequence(
+      motions: List.unmodifiable(matched),
+      unmatchedWords: List.unmodifiable(unmatched),
+      normalizedText: normalized,
+    );
+  }
+
+  static String _normalizeText(String value) => value
+      .toLowerCase()
+      .replaceAll(RegExp(r'[_\-]+'), ' ')
+      .replaceAll(RegExp(r'[^a-z0-9\s]'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+
+  static const Map<String, List<String>> _phraseAliases = {
+    'disini': ['di sini', 'sini'],
+    'bantuannya': ['bantuan', 'membantu', 'bantu'],
+  };
+
+  static const Set<String> _ignoredGrammarWords = {
+    'dan',
+    'atau',
+    'yang',
+    'di',
+    'ke',
+    'dari',
+    'untuk',
+    'dengan',
+  };
+
+  static String _motionRoot(String value) {
+    const aliases = {
+      'ingin': 'mau',
+      'hendak': 'mau',
+      'pengin': 'mau',
+      'pengen': 'mau',
+      'tolong': 'bantuan',
+      'membantu': 'bantuan',
+      'bantu': 'bantuan',
+    };
+    var word = aliases[value] ?? value;
+
+    for (final suffix in const [
+      'lah',
+      'kah',
+      'tah',
+      'pun',
+      'ku',
+      'mu',
+      'nya',
+    ]) {
+      if (word.endsWith(suffix) && word.length - suffix.length >= 3) {
+        word = word.substring(0, word.length - suffix.length);
+        break;
+      }
+    }
+    for (final suffix in const ['kan', 'an', 'i']) {
+      if (word.endsWith(suffix) && word.length - suffix.length >= 4) {
+        word = word.substring(0, word.length - suffix.length);
+        break;
+      }
+    }
+    for (final prefix in const [
+      'meng',
+      'meny',
+      'peng',
+      'peny',
+      'mem',
+      'men',
+      'pem',
+      'pen',
+      'ber',
+      'ter',
+      'per',
+      'di',
+      'ke',
+      'se',
+    ]) {
+      if (word.startsWith(prefix) && word.length - prefix.length >= 3) {
+        word = word.substring(prefix.length);
+        break;
+      }
+    }
+    return word;
+  }
+
   Uint8List? _cachedGlbBytes;
 
   Future<Uint8List> _loadGlbBytes() async {
@@ -249,13 +428,24 @@ class AvatarMotionService {
       final path = req.uri.path;
       debugPrint('[AvatarMotionService] Incoming request: $path');
       try {
-        if (path == '/' || path == '/index.html') {
-          final data = await rootBundle.loadString('assets/avatar/viewer.html');
+        if (path == '/' ||
+            path == '/index.html' ||
+            path == '/avatar_viewer.html' ||
+            path == '/pose_studio.html') {
+          final page = path == '/pose_studio.html'
+              ? 'pose_studio.html'
+              : path == '/avatar_viewer.html'
+              ? 'avatar_viewer.html'
+              : 'viewer.html';
+          final data = await rootBundle.loadString('assets/avatar/$page');
           final bytes = utf8.encode(data);
           req.response
             ..headers.contentType = ContentType.html
             ..headers.set('Access-Control-Allow-Origin', '*')
-            ..headers.set('Cache-Control', 'no-cache, no-store, must-revalidate')
+            ..headers.set(
+              'Cache-Control',
+              'no-cache, no-store, must-revalidate',
+            )
             ..contentLength = bytes.length
             ..add(bytes);
           await req.response.close();
@@ -285,11 +475,61 @@ class AvatarMotionService {
             byteData.lengthInBytes,
           );
           req.response
-            ..headers.set('Content-Type', 'application/javascript; charset=utf-8')
+            ..headers.set(
+              'Content-Type',
+              'application/javascript; charset=utf-8',
+            )
             ..headers.set('Access-Control-Allow-Origin', '*')
             ..headers.set('Cache-Control', 'public, max-age=3600')
             ..contentLength = bytes.length
             ..add(bytes);
+          await req.response.close();
+          return;
+        }
+
+        if (path.startsWith('/videos_manual/') && path.endsWith('.mp4')) {
+          final filename = path.substring('/videos_manual/'.length);
+          if (filename.contains('/') || filename.contains('\\')) {
+            req.response.statusCode = HttpStatus.badRequest;
+            await req.response.close();
+            return;
+          }
+          final byteData = await rootBundle.load(
+            'assets/avatar/videos_manual/$filename',
+          );
+          final bytes = byteData.buffer.asUint8List(
+            byteData.offsetInBytes,
+            byteData.lengthInBytes,
+          );
+          final range = req.headers.value(HttpHeaders.rangeHeader);
+          final match = range == null
+              ? null
+              : RegExp(r'^bytes=(\d+)-(\d*)$').firstMatch(range);
+          final start = match == null ? 0 : int.parse(match.group(1)!);
+          final requestedEnd = match?.group(2);
+          final end = requestedEnd == null || requestedEnd.isEmpty
+              ? bytes.length - 1
+              : int.parse(requestedEnd);
+          if (start >= bytes.length || end < start) {
+            req.response
+              ..statusCode = HttpStatus.requestedRangeNotSatisfiable
+              ..headers.set(
+                HttpHeaders.contentRangeHeader,
+                'bytes */${bytes.length}',
+              );
+            await req.response.close();
+            return;
+          }
+          final last = end < bytes.length ? end : bytes.length - 1;
+          req.response
+            ..statusCode = match == null
+                ? HttpStatus.ok
+                : HttpStatus.partialContent
+            ..headers.set(HttpHeaders.contentTypeHeader, 'video/mp4')
+            ..headers.set(HttpHeaders.acceptRangesHeader, 'bytes')
+            ..headers.set('Access-Control-Allow-Origin', '*')
+            ..contentLength = last - start + 1
+            ..add(bytes.sublist(start, last + 1));
           await req.response.close();
           return;
         }
@@ -353,8 +593,9 @@ class AvatarMotionService {
 
   /// Tutup server jika tidak diperlukan lagi
   Future<void> stopServer() async {
-    await _server?.close(force: true);
+    final server = _server;
     _server = null;
     _port = 0;
+    await server?.close(force: true);
   }
 }
