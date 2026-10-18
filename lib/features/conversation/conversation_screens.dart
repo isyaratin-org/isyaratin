@@ -692,6 +692,10 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
                           style: OutlinedButton.styleFrom(
                             foregroundColor: Colors.redAccent,
                             side: const BorderSide(color: Colors.redAccent),
+                            // Tema global memakai Size.fromHeight (lebar tak
+                            // terbatas). Di dalam Row harus dioverride agar
+                            // tombol Batal tidak mendorong konten keluar layar.
+                            minimumSize: const Size(72, 50),
                             padding: const EdgeInsets.symmetric(
                               vertical: 14,
                               horizontal: 16,
@@ -1019,10 +1023,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     return Material(
       color: Colors.black.withValues(alpha: 0.55),
       shape: CircleBorder(
-        side: BorderSide(
-          color: Colors.white.withValues(alpha: 0.18),
-          width: 1,
-        ),
+        side: BorderSide(color: Colors.white.withValues(alpha: 0.18), width: 1),
       ),
       clipBehavior: Clip.antiAlias,
       child: IconButton(
@@ -1184,75 +1185,130 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
             top: false,
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
-              child: Row(
-                children: [
-                  Container(
-                    width: 10,
-                    height: 10,
-                    decoration: const BoxDecoration(
-                      color: Colors.redAccent,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'MEREKAM ${duration}s · $frames frame',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  // Tombol berlabel lengkap tidak muat pada layar ponsel dan
+                  // pernah membuat teks status mendapat lebar hampir nol lalu
+                  // terbungkus satu huruf per baris. Di layar sempit gunakan
+                  // tombol ikon tetap 40 px agar status selalu satu baris.
+                  final compact = constraints.maxWidth < 480;
+
+                  return Row(
+                    children: [
+                      Container(
+                        width: 10,
+                        height: 10,
+                        decoration: const BoxDecoration(
+                          color: Colors.redAccent,
+                          shape: BoxShape.circle,
+                        ),
                       ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  OutlinedButton(
-                    onPressed: _cancelRecording,
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: Colors.white,
-                      side: const BorderSide(color: Colors.white54),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 10,
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'MEREKAM ${duration}s · $frames frame',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          softWrap: false,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
                       ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                    ),
-                    child: const Text('Batal'),
-                  ),
-                  const SizedBox(width: 8),
-                  ElevatedButton.icon(
-                    onPressed: _isAnalyzing ? null : _stopAndRecognize,
-                    icon: _isAnalyzing
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
+                      const SizedBox(width: 8),
+                      if (compact) ...[
+                        _buildRecordingBarIconButton(
+                          icon: Icons.close_rounded,
+                          tooltip: 'Batalkan perekaman',
+                          onPressed: _cancelRecording,
+                        ),
+                        const SizedBox(width: 6),
+                        _buildRecordingBarIconButton(
+                          icon: Icons.stop_rounded,
+                          tooltip: 'Berhenti & terjemahkan',
+                          onPressed: _isAnalyzing ? null : _stopAndRecognize,
+                          filled: true,
+                        ),
+                      ] else ...[
+                        OutlinedButton(
+                          onPressed: _cancelRecording,
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.white,
+                            side: const BorderSide(color: Colors.white54),
+                            minimumSize: const Size(70, 40),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 10,
                             ),
-                          )
-                        : const Icon(Icons.stop_rounded, size: 20),
-                    label: Text(_isAnalyzing ? 'Memproses...' : 'Berhenti'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red.shade700,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 10,
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                    ),
-                  ),
-                ],
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                          ),
+                          child: const Text('Batal'),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton.icon(
+                          onPressed: _isAnalyzing ? null : _stopAndRecognize,
+                          icon: _isAnalyzing
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Icon(Icons.stop_rounded, size: 20),
+                          label: Text(
+                            _isAnalyzing ? 'Memproses...' : 'Berhenti',
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red.shade700,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 10,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  );
+                },
               ),
             ),
           ),
         );
       },
+    );
+  }
+
+  Widget _buildRecordingBarIconButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback? onPressed,
+    bool filled = false,
+  }) {
+    return IconButton(
+      onPressed: onPressed,
+      tooltip: tooltip,
+      icon: Icon(icon, size: 22),
+      color: Colors.white,
+      disabledColor: Colors.white38,
+      constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+      padding: EdgeInsets.zero,
+      style: IconButton.styleFrom(
+        backgroundColor: filled ? Colors.red.shade700 : Colors.transparent,
+        side: filled
+            ? BorderSide.none
+            : const BorderSide(color: Colors.white54),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ),
     );
   }
 }

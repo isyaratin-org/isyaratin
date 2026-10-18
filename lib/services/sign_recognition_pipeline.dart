@@ -162,6 +162,7 @@ class SignRecognitionPipeline {
   // conversion in Kotlin on every call, which is the dominant per-frame cost.
   // Feed it at ~12 fps (matching training) instead of camera capture rate.
   int _lastHandProcessMs = 0;
+  int _lastHandRotationDegrees = 0;
 
   void _initHandLandmarker() {
     if (!kIsWeb && Platform.isAndroid) {
@@ -177,7 +178,11 @@ class SignRecognitionPipeline {
           _latestHands = [
             for (final hand in hands)
               HandLandmarks([
-                for (final lm in hand.landmarks) Point3D(lm.x, lm.y, lm.z),
+                for (final lm in hand.landmarks)
+                  _rotateNormalizedPoint(
+                    Point3D(lm.x, lm.y, lm.z),
+                    _lastHandRotationDegrees,
+                  ),
               ]),
           ];
         });
@@ -251,6 +256,7 @@ class SignRecognitionPipeline {
     if (image.planes.length >= 3 &&
         now - _lastHandProcessMs >= _targetIntervalMs) {
       _lastHandProcessMs = now;
+      _lastHandRotationDegrees = sensorOrientation;
       _handLandmarker?.processFrame(image, sensorOrientation);
     }
 
@@ -344,7 +350,20 @@ class SignRecognitionPipeline {
         return;
       }
 
-      final extracted = _extractor.extractFrame(_latestHands, pose);
+      final isQuarterTurn =
+          frame.sensorOrientation == 90 || frame.sensorOrientation == 270;
+      final orientedWidth = isQuarterTurn
+          ? frame.height.toDouble()
+          : frame.width.toDouble();
+      final orientedHeight = isQuarterTurn
+          ? frame.width.toDouble()
+          : frame.height.toDouble();
+      final extracted = _extractor.extractFrame(
+        _latestHands,
+        pose,
+        frameWidth: orientedWidth,
+        frameHeight: orientedHeight,
+      );
       if (extracted != null && _isRecording) {
         final hasHand =
             handCount > 0 ||
@@ -478,12 +497,12 @@ class SignRecognitionPipeline {
     }
 
     final total = frames.length;
-    const windowSize = LandmarkExtractor.seqLen; // 32
+    final windowSize = model.sequenceLength;
     final recognizedWords = <RecognizedSignWord>[];
 
     // Single-word gesture: sequence length is short (10 to 42 frames, ~0.8s to 3.5s)
     if (total <= 42) {
-      final tensor = _resampleSequence(frames, windowSize);
+      final tensor = model.prepareInput(_resampleSequence(frames, windowSize));
       final preds = model.recognize(tensor);
       if (preds.isNotEmpty) {
         final top = preds.first;
@@ -509,7 +528,7 @@ class SignRecognitionPipeline {
         final slice = frames.sublist(start, end);
         if (slice.length < 14 && windowPreds.isNotEmpty) break;
 
-        final tensor = _resampleSequence(slice, windowSize);
+        final tensor = model.prepareInput(_resampleSequence(slice, windowSize));
         final preds = model.recognize(tensor);
         if (preds.isNotEmpty) {
           windowPreds.add(
@@ -653,7 +672,7 @@ class SignRecognitionPipeline {
       );
       final poses = await detector.processImage(inputImage);
       if (poses.isEmpty) return null;
-      return _poseToLandmarks(poses.first);
+      return _poseToLandmarks(poses.first, width, height, sensorOrientation);
     } catch (e) {
       debugPrint('_detectPoseFromNv21 error: $e');
       return null;
@@ -720,10 +739,17 @@ class SignRecognitionPipeline {
     }
   }
 
-  PoseLandmarks _poseToLandmarks(Pose pose) {
+  PoseLandmarks _poseToLandmarks(
+    Pose pose,
+    int width,
+    int height,
+    int sensorOrientation,
+  ) {
     Point3D? p(PoseLandmarkType type) {
       final lm = pose.landmarks[type];
-      return lm == null ? null : Point3D(lm.x, lm.y, lm.z);
+      if (lm == null || width <= 0 || height <= 0) return null;
+      final normalized = Point3D(lm.x / width, lm.y / height, lm.z / width);
+      return _rotateNormalizedPoint(normalized, sensorOrientation);
     }
 
     return PoseLandmarks(
@@ -747,6 +773,19 @@ class SignRecognitionPipeline {
       leftHip: p(PoseLandmarkType.leftHip),
       rightHip: p(PoseLandmarkType.rightHip),
     );
+  }
+
+  Point3D _rotateNormalizedPoint(Point3D point, int rotationDegrees) {
+    switch (rotationDegrees % 360) {
+      case 90:
+        return Point3D(1.0 - point.y, point.x, point.z);
+      case 180:
+        return Point3D(1.0 - point.x, 1.0 - point.y, point.z);
+      case 270:
+        return Point3D(point.y, 1.0 - point.x, point.z);
+      default:
+        return point;
+    }
   }
 
   Future<void> dispose() async {

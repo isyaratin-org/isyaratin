@@ -33,8 +33,22 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
+}
+
+dependencies {
+    // google_mlkit_pose_detection still requests WorkManager 2.7.0. That
+    // version predates current Android/AGP releases and its Room database is
+    // stripped by R8 full mode, causing the release APK to crash before
+    // Flutter starts. Keep all WorkManager artifacts on one current version.
+    implementation("androidx.work:work-runtime:2.11.2")
+    implementation("androidx.work:work-runtime-ktx:2.11.2")
+    implementation("androidx.work:work-multiprocess:2.11.2")
 }
 
 kotlin {

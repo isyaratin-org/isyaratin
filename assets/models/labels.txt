@@ -1,7 +1,5 @@
 100 Ribu Rupiah
-A
 Apa
-B
 Bagaimana
 Baik
 Bantuannya
@@ -9,47 +7,23 @@ Bapak
 Berapa
 Buka
 Buku Rekening
-C
 Cari
-D
 Di Mana
 Disini
-E
-F
 Formulir
-G
-H
-I
 Isi
-J
-K
 Kapan
 KTP
-L
 Lagi
-M
 Mau
 Membawa
 Mengapa
 Minimal
-N
-O
-P
-Q
-R
-S
 Sama-Sama
 Saya
 Selamat Siang
 Setoran Awal
 Siapa
 Silakan
-T
 Tanda Tangan
 Terima Kasih
-U
-V
-W
-X
-Y
-Z
