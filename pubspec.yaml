@@ -38,7 +38,6 @@ flutter:
     - assets/avatar/
     - assets/avatar/js/
     - assets/avatar/motions/
-    - assets/avatar/videos_manual/
   fonts:
     - family: Inter
       fonts:
