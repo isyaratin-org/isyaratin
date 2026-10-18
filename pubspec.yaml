@@ -1,7 +1,7 @@
 name: isyaratin
 description: Asisten komunikasi dua arah bahasa isyarat.
 publish_to: none
-version: 0.1.0+1
+version: 1.0.0+1
 environment:
   sdk: ">=3.9.0 <4.0.0"
 dependencies:

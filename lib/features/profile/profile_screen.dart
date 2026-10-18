@@ -184,7 +184,7 @@ class ProfileScreen extends ConsumerWidget {
                       onTap: () => showAboutDialog(
                         context: context,
                         applicationName: 'ISYARATIN',
-                        applicationVersion: '0.1.0',
+                        applicationVersion: '1.0.0',
                         applicationIcon: const BrandLogo(),
                         children: [
                           const Text(
@@ -196,7 +196,7 @@ class ProfileScreen extends ConsumerWidget {
                       ),
                     ),
                     const Divider(height: 1, color: AppColors.border),
-                    const _SettingsTile('Versi Aplikasi', 'v0.1.0', '27ddc'),
+                    const _SettingsTile('Versi Aplikasi', 'v1.0', '27ddc'),
                   ],
                 ),
               ),
